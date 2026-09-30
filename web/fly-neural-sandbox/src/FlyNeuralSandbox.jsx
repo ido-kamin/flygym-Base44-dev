@@ -252,7 +252,7 @@ export default function FlyNeuralSandbox() {
   const [bodyStatus, setBodyStatus] = useState('loading');
   const [playback, setPlayback] = useState(1);
   const [real, setReal] = useState({ status: 'loading', progress: 0 });
-  const [motorMode, setMotorMode] = useState('neurons');
+  const [motorMode, setMotorMode] = useState('hybrid');
   const [explore, setExplore] = useState(0);
   const [lesions, setLesions] = useState({});
   const [sideTab, setSideTab] = useState(() => {
@@ -337,7 +337,7 @@ export default function FlyNeuralSandbox() {
     };
     engineRef.current = engine;
     game.setMission(engine.mission);
-    game.motorMode = 'neurons';
+    game.motorMode = 'hybrid';
     const dna0 = game.toDNA();
     engine.terminal.reset(dna0, unpackDNA(decodeBase44(dna0)));
 
@@ -774,7 +774,7 @@ export default function FlyNeuralSandbox() {
       setMotorMode(m);
       const e = engineRef.current;
       if (e) e.game.motorMode = m;
-      showToast(m === 'neurons' ? 'Neurons only: every movement now comes from FlyWire descending neurons' : 'Autopilot: the genome model steers, the FlyWire brain still fires escapes and feeding', 'info');
+      showToast(m === 'neurons' ? 'Neurons only: FlyWire motor output without lifelike assistance' : m === 'hybrid' ? 'Lifelike hybrid: behavioral assistance + live neural responses' : 'Autopilot: the genome model steers, the FlyWire brain still fires escapes and feeding', 'info');
     },
     [showToast],
   );
@@ -785,13 +785,13 @@ export default function FlyNeuralSandbox() {
       if (k === 'sandbox') {
         onMission('sandbox');
         setSideTab('sandbox');
-        setMotorMode('neurons');
-        if (e) e.game.motorMode = 'neurons';
+        setMotorMode('hybrid');
+        if (e) e.game.motorMode = 'hybrid';
       } else if (k === 'train') {
         onMission('forage');
         setSideTab('learn');
-        setMotorMode('neurons');
-        if (e) e.game.motorMode = 'neurons';
+        setMotorMode('hybrid');
+        if (e) e.game.motorMode = 'hybrid';
         setTool((t) => (t.startsWith('odor') ? 'sugar' : t));
       } else {
         const m = BUILD_MISSIONS.includes(e?.mission) ? e.mission : 'build';

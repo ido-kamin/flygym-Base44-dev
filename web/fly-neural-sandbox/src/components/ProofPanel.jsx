@@ -100,6 +100,11 @@ export default function ProofPanel({ real, getRaster, motor, onSelfTest }) {
   return (
     <div data-testid="proof-panel" className="flex flex-col gap-2.5 text-[11px]">
       <Where where={real?.where} />
+      {motor?.mode === 'hybrid' && (
+        <p className="rounded-lg bg-void px-2.5 py-2 text-neutral-300">
+          Lifelike hybrid: food targeting, walking bouts and obstacle avoidance are behavioral rules, blended with neural steering, learned odour responses and brain-triggered escapes. Movement is not purely emergent from the connectome; silencing neurons does not disable the assistance.
+        </p>
+      )}
       {real?.stats && (
         <div className="grid grid-cols-3 gap-1.5 font-mono text-[10px] text-neutral-400">
           <div className="rounded-md bg-void px-2 py-1.5">
@@ -141,7 +146,7 @@ export default function ProofPanel({ real, getRaster, motor, onSelfTest }) {
             <span className="text-neutral-500">body </span>
             {motor ? motor.speedMm.toFixed(1) : '0.0'} mm/s, {turnDeg > 0 ? `${turnDeg}°/s right` : turnDeg < 0 ? `${-turnDeg}°/s left` : 'straight'}
             <span className="text-neutral-500">
-              {motor?.escaping ? ' · escape jump (DNp01 motor program)' : motor?.mode === 'neurons' ? ' · neurons only' : ' · autopilot + neurons'}
+              {motor?.escaping ? ' · escape jump (DNp01 motor program)' : motor?.mode === 'neurons' ? ' · neurons only' : motor?.mode === 'hybrid' ? ' · lifelike assistance + neurons' : ' · autopilot + neurons'}
             </span>
           </div>
           <div className="mt-1 text-neutral-500">
