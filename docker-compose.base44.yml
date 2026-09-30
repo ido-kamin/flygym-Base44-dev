@@ -1,0 +1,51 @@
+x-python: &python
+  build:
+    context: .
+    dockerfile: .base44/Dockerfile
+  working_dir: /app
+  volumes:
+    - .:/app
+    - python-env:/app/.venv
+    - python-cache:/root/.cache
+  environment:
+    UV_PYTHON: /usr/local/bin/python
+    UV_LINK_MODE: copy
+    UV_PYTHON_DOWNLOADS: never
+    MUJOCO_GL: egl
+    PYOPENGL_PLATFORM: egl
+    PYTHONUNBUFFERED: "1"
+
+services:
+  setup:
+    <<: *python
+    command:
+      - sh
+      - -ec
+      - uv sync --frozen --extra dev && .venv/bin/python scripts/dev/properdocs_hooks.py
+
+  web:
+    <<: *python
+    restart: on-failure
+    depends_on:
+      setup:
+        condition: service_completed_successfully
+    ports:
+      - "3000:3000"
+    command:
+      - sh
+      - -ec
+      - uv sync --frozen --extra dev && exec .venv/bin/properdocs serve --dev-addr 0.0.0.0:3000 --watch src
+    healthcheck:
+      test:
+        - CMD
+        - .venv/bin/python
+        - -c
+        - "import urllib.request; r = urllib.request.urlopen('http://127.0.0.1:3000/', timeout=5); assert r.status == 200 and b'NeuroMechFly' in r.read(), 'Documentation server failed'"
+      interval: 30s
+      timeout: 10s
+      start_period: 180s
+      retries: 3
+
+volumes:
+  python-env:
+  python-cache:
