@@ -15,5 +15,9 @@ export const MAX_SCORE = 4095;
 export const GENE_COUNT = 6;
 export const GENE_LEVELS = 16;
 
-/** Neurons in the rendered brain: the FlyWire whole-brain count. */
-export const NEURON_COUNT = 139255;
+/** Brain neurons: the FlyWire whole-brain count (Dorkenwald et al. 2024). */
+export const BRAIN_NEURONS = 139255;
+/** Ventral nerve cord neurons: MANC, the male adult nerve cord (~22.3k). */
+export const VNC_NEURONS = 22300;
+/** Neurons rendered in 3D: brain + VNC. */
+export const NEURON_COUNT = BRAIN_NEURONS + VNC_NEURONS;

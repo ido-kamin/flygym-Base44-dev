@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
 import { decodeFlyFromBase44, encodeBase44, packDNA } from './base44.js';
-import { buildBrain } from './brainGeometry.js';
-import { NEURON_COUNT } from './constants.js';
+import { buildBrain, REGION_COUNTS } from './brainGeometry.js';
+import { BRAIN_NEURONS, NEURON_COUNT, VNC_NEURONS } from './constants.js';
 import { CLUSTER_COUNT, EDGES } from './connectome.js';
 import { Game, PREDATOR_MAX, STEP } from './game.js';
 import { generationOf, mulberry32, mutate, personality } from './genome.js';
@@ -134,10 +134,19 @@ describe('game', () => {
 });
 
 describe('brain geometry', () => {
-  it('builds exactly the FlyWire neuron count with valid clusters and tracts', () => {
+  it('builds the FlyWire brain count plus the MANC VNC, region by region', () => {
     const b = buildBrain(44);
     expect(b.count).toBe(NEURON_COUNT);
+    expect(b.brainCount).toBe(BRAIN_NEURONS);
+    expect(b.count - b.brainCount).toBe(VNC_NEURONS);
     expect(b.positions).toHaveLength(NEURON_COUNT * 3);
+    const per = new Array(CLUSTER_COUNT).fill(0);
+    b.cluster.forEach((c) => per[c]++);
+    expect(per[0] + per[1]).toBe(REGION_COUNTS.OL);
+    expect(per[4] + per[5]).toBe(REGION_COUNTS.MB);
+    expect(per[10]).toBe(REGION_COUNTS.PAM);
+    expect(per[12]).toBe(REGION_COUNTS.DN);
+    expect(per[13] + per[14] + per[15]).toBe(VNC_NEURONS);
     expect(b.positions.every(Number.isFinite)).toBe(true);
     expect(b.cluster.every((c) => c >= 0 && c < CLUSTER_COUNT)).toBe(true);
     const seen = new Set(b.cluster);
@@ -146,8 +155,8 @@ describe('brain geometry', () => {
   });
 
   it('is reproducible for a seed', () => {
-    const a = buildBrain(7, 5000);
-    const b = buildBrain(7, 5000);
+    const a = buildBrain(7, 5000, 800);
+    const b = buildBrain(7, 5000, 800);
     expect(a.positions).toEqual(b.positions);
   });
 });

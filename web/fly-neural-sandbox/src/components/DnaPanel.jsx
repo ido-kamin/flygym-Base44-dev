@@ -33,7 +33,8 @@ function Section({ title, children, right }) {
   );
 }
 
-export default function DnaPanel({ hud, onCopy, copied }) {
+export default function DnaPanel({ hud, mode, onCopy, copied, onBuild, children }) {
+  const vibe = mode === 'vibe';
   const chars = [...hud.dna];
   const headingDeg = Math.round(hud.pose.heading * 22.5);
 
@@ -43,8 +44,12 @@ export default function DnaPanel({ hud, onCopy, copied }) {
 
       <div>
         <div className="flex items-center justify-between">
-          <h2 className="text-[11px] font-black uppercase tracking-[0.3em] text-fuchsia-300">Viral DNA</h2>
-          <span className="rounded border border-white/10 px-1.5 py-0.5 font-mono text-[9px] text-slate-400">BASE44 · 48 BIT</span>
+          <h2 className="text-[11px] font-black uppercase tracking-[0.3em] text-fuchsia-300">
+            {vibe ? "Fly's Compiled Bytecode" : 'Viral DNA'}
+          </h2>
+          <span className="rounded border border-white/10 px-1.5 py-0.5 font-mono text-[9px] text-slate-400">
+            {vibe ? 'PROOF OF COMPILATION · BASE44' : 'BASE44 · 48 BIT'}
+          </span>
         </div>
 
         <div
@@ -74,6 +79,22 @@ export default function DnaPanel({ hud, onCopy, copied }) {
         >
           {copied ? '✓ Link copied' : '🧬 Copy Viral DNA Link'}
         </button>
+
+        <button
+          type="button"
+          onClick={onBuild}
+          data-testid="build-base44"
+          className="mt-2 w-full rounded-xl border border-fuchsia-300/60 bg-fuchsia-500/10 px-4 py-2.5 text-xs font-black uppercase tracking-[0.14em] text-fuchsia-50 shadow-[0_0_20px_-6px_rgba(232,121,249,0.9)] transition hover:bg-fuchsia-500/20 active:scale-[0.98]"
+          title="Turns this fly's DNA into an app prompt and opens the Base44 builder"
+        >
+          🛠 Build this fly&apos;s app on Base44
+        </button>
+        {children}
+        {vibe && (
+          <p className="mt-2 font-mono text-[10px] text-slate-500">
+            pipeline {hud.pipeline * 20}% · deployments <span className="text-[#8fb2ff]">{hud.deployments}</span> (simulated)
+          </p>
+        )}
       </div>
 
       <Section title="Bit matrix" right={<span className="font-mono text-[9px] text-slate-500">MSB → LSB</span>}>

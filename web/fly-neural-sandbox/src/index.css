@@ -17,6 +17,7 @@
   --animate-dna-flash: dna-flash 0.8s ease-out;
   --animate-bump: bump 0.4s cubic-bezier(0.2, 1.6, 0.4, 1);
   --animate-toast-in: toast-in 0.25s ease-out;
+  --animate-toast-in-static: fade-up 0.3s ease-out;
   --animate-scan: scan 6s linear infinite;
   --animate-pulse-red: pulse-red 0.9s ease-in-out infinite;
 
@@ -47,6 +48,16 @@
     to {
       opacity: 1;
       transform: translate(-50%, 0);
+    }
+  }
+  @keyframes fade-up {
+    from {
+      opacity: 0;
+      transform: translateY(6px);
+    }
+    to {
+      opacity: 1;
+      transform: none;
     }
   }
   @keyframes scan {

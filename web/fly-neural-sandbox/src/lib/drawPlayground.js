@@ -3,7 +3,16 @@
 
 import { ARENA, GRID } from './constants.js';
 import { quantizePose } from './base44.js';
-import { PREDATOR_RADIUS } from './game.js';
+import { PIPELINE, PREDATOR_RADIUS } from './game.js';
+
+/** Vibecode token colors; Base uses the Base brand blue. */
+export const TOKEN_COLORS = {
+  Compile: '#22d3ee',
+  Audit: '#fbbf24',
+  Mint: '#a3e635',
+  Deploy: '#e879f9',
+  Base: '#3b7bff',
+};
 
 const TAU = Math.PI * 2;
 
@@ -12,6 +21,7 @@ export function createPlaygroundView(canvas) {
   let dpr = 1;
   let time = 0;
   let cursor = null;
+  let mode = 'sugar';
   const particles = [];
   const texts = [];
   const rings = [];
@@ -59,6 +69,12 @@ export function createPlaygroundView(canvas) {
     }
   }
 
+  /** Big banners stack instead of overlapping when several fire at once. */
+  function banner(text, color, life) {
+    const live = texts.filter((t) => t.big).length;
+    texts.push({ x: ARENA.w / 2, y: ARENA.h / 2 + live * 56, text, color, age: 0, life, big: true });
+  }
+
   function consume(events) {
     for (const ev of events) {
       if (ev.type === 'eat') {
@@ -75,8 +91,13 @@ export function createPlaygroundView(canvas) {
         rings.push({ x: ev.x, y: ev.y, age: 0, life: 0.8, color: '244,63,94', r: 70 });
       } else if (ev.type === 'sugar') {
         burst(ev.x, ev.y, ['#fde047', '#fef9c3'], 10, 70);
+      } else if (ev.type === 'stage' && mode === 'vibe') {
+        texts.push({ x: ARENA.w / 2, y: 70, text: `[${ev.stage}] ✓ ${Math.round(ev.progress * 100)}%`, color: TOKEN_COLORS[ev.stage], age: 0, life: 1.3 });
+      } else if (ev.type === 'deployed' && mode === 'vibe') {
+        banner('DEPLOYED ON BASE 🚀', '#6b9bff', 2.2);
+        burst(ARENA.w / 2, ARENA.h / 2, ['#3b7bff', '#ffffff', '#e879f9'], 60, 320);
       } else if (ev.type === 'levelup') {
-        texts.push({ x: ARENA.w / 2, y: ARENA.h / 2, text: 'GENERATION UP', color: '#f0abfc', age: 0, life: 1.6, big: true });
+        banner('GENERATION UP', '#f0abfc', 1.6);
       }
     }
   }
@@ -164,6 +185,64 @@ export function createPlaygroundView(canvas) {
     ctx.beginPath();
     ctx.arc(-1.5, -1.5, 1.8, 0, TAU);
     ctx.fill();
+    ctx.restore();
+  }
+
+  function drawToken(s, need) {
+    const color = TOKEN_COLORS[s.kind] ?? '#ffffff';
+    const pop = Math.min(1, s.age * 4);
+    const next = s.kind === need;
+    const pulse = 0.7 + 0.3 * Math.sin(time * (next ? 7 : 3) + s.phase);
+    const label = `[${s.kind}]`;
+    ctx.save();
+    ctx.translate(s.x, s.y);
+    ctx.scale(pop, pop);
+    ctx.font = '700 12px ui-monospace, SFMono-Regular, Menlo, monospace';
+    const w = ctx.measureText(label).width + 12;
+    ctx.shadowColor = color;
+    ctx.shadowBlur = (next ? 22 : 10) * pulse;
+    ctx.fillStyle = 'rgba(3,6,20,0.85)';
+    ctx.strokeStyle = color;
+    ctx.lineWidth = next ? 2 : 1.2;
+    ctx.beginPath();
+    ctx.roundRect(-w / 2, -10, w, 20, 5);
+    ctx.fill();
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = color;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(label, 0, 1);
+    if (next) {
+      ctx.strokeStyle = color;
+      ctx.globalAlpha = 0.5 * pulse;
+      ctx.beginPath();
+      ctx.arc(0, 0, w / 2 + 8 + 4 * Math.sin(time * 5), 0, TAU);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  function drawPipeline(game) {
+    const x0 = ARENA.w - 20 - PIPELINE.length * 70;
+    ctx.save();
+    ctx.font = '700 10px ui-monospace, SFMono-Regular, Menlo, monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    PIPELINE.forEach((stage, i) => {
+      const done = i < game.pipeline;
+      const active = i === game.pipeline;
+      const color = TOKEN_COLORS[stage];
+      ctx.globalAlpha = done ? 1 : active ? 0.75 + 0.25 * Math.sin(time * 6) : 0.3;
+      ctx.fillStyle = done ? color : 'rgba(3,6,20,0.8)';
+      ctx.strokeStyle = color;
+      ctx.beginPath();
+      ctx.roundRect(x0 + i * 70, 16, 62, 18, 4);
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = done ? '#020617' : color;
+      ctx.fillText(stage, x0 + i * 70 + 31, 25.5);
+    });
     ctx.restore();
   }
 
@@ -518,7 +597,12 @@ export function createPlaygroundView(canvas) {
     drawGrid(game);
     drawOdor(game);
     drawTrail(game);
-    for (const s of game.sugars) drawSugar(s);
+    if (mode === 'vibe') {
+      const need = PIPELINE[game.pipeline];
+      for (const s of game.sugars) drawToken(s, need);
+    } else {
+      for (const s of game.sugars) drawSugar(s);
+    }
     drawSensoryRays(game);
     for (const p of game.predators) drawSpider(p);
     drawFly(game);
@@ -526,6 +610,7 @@ export function createPlaygroundView(canvas) {
     if (cursor && cursor.armed) {
       drawSpider({ x: cursor.x, y: cursor.y, theta: -Math.PI / 2, gait: time, hunting: false }, 0.45);
     }
+    if (mode === 'vibe') drawPipeline(game);
     ctx.restore();
     drawBorder();
   }
@@ -536,6 +621,9 @@ export function createPlaygroundView(canvas) {
     clientToWorld,
     setCursor(c) {
       cursor = c;
+    },
+    setMode(m) {
+      mode = m;
     },
     dispose() {
       observer.disconnect();

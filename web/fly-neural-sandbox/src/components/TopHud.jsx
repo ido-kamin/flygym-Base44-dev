@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 
-import { NEURON_COUNT } from '../lib/constants.js';
+import { BRAIN_NEURONS, VNC_NEURONS } from '../lib/constants.js';
 
 /** Animate an integer toward `value` (score ticker). */
 function useCountUp(value, ms = 450) {
@@ -33,7 +33,7 @@ function Stat({ label, children, className = '' }) {
   );
 }
 
-export default function TopHud({ hud }) {
+export default function TopHud({ hud, mode, onMode }) {
   const score = useCountUp(hud.score);
   const energy = Math.max(0, Math.min(100, hud.energy));
   const low = energy < 25;
@@ -50,12 +50,35 @@ export default function TopHud({ hud }) {
               Fly Neural Sandbox
             </h1>
             <p className="font-mono text-[10px] text-slate-500">
-              {NEURON_COUNT.toLocaleString('en-US')} neurons · {hud.fps} fps
+              {BRAIN_NEURONS.toLocaleString('en-US')} brain + {VNC_NEURONS.toLocaleString('en-US')} VNC neurons · {hud.fps} fps
             </p>
           </div>
         </div>
 
-        <Stat label="Score">
+        <div className="flex rounded-xl border border-white/10 bg-black/40 p-0.5" role="group" aria-label="Theme">
+          {[
+            ['sugar', '🍬 Sugar'],
+            ['vibe', '⌨ Vibecode · Base'],
+          ].map(([m, label]) => (
+            <button
+              key={m}
+              type="button"
+              onClick={() => onMode(m)}
+              aria-pressed={mode === m}
+              className={`rounded-lg px-2.5 py-1.5 text-[11px] font-black uppercase tracking-wider transition ${
+                mode === m
+                  ? m === 'vibe'
+                    ? 'bg-[#0052ff]/40 text-white shadow-[0_0_16px_rgba(0,82,255,0.8)]'
+                    : 'bg-lime-400/20 text-lime-100 shadow-[0_0_16px_rgba(163,230,53,0.5)]'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+
+        <Stat label={mode === 'vibe' ? 'Commits' : 'Score'}>
           <span
             key={hud.score}
             className="inline-block origin-left animate-bump font-mono text-2xl font-black tabular-nums text-white drop-shadow-[0_0_10px_rgba(253,224,71,0.55)]"

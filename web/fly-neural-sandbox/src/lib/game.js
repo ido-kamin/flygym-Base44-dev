@@ -22,9 +22,11 @@ export const STEP = 1 / 120;
 const MAX_STEPS_PER_ADVANCE = 24;
 
 export const FLY_RADIUS = 16;
+/** Vibecode theme: food items are pipeline tokens; collect them in this order to deploy. */
+export const PIPELINE = ['Compile', 'Audit', 'Mint', 'Deploy', 'Base'];
 const WALL_MARGIN = 20;
-const MAX_SPEED = 300; // world units / s at full locomotor drive and full DN
-const MAX_TURN = 5.5; // rad / s
+export const MAX_SPEED = 300; // world units / s at full locomotor drive and full DN
+export const MAX_TURN = 5.5; // rad / s
 const SUGAR_TARGET = 12;
 const SUGAR_MAX = 24;
 const SUGAR_RADIUS = 9;
@@ -73,6 +75,8 @@ export class Game {
     this.trailClock = 0;
     this.predators = [];
     this.sugars = [];
+    this.pipeline = 0; // index of the next PIPELINE stage the fly needs
+    this.deployments = 0;
     this.fly = {
       x: pose ? pose.x : ARENA.w / 2,
       y: pose ? pose.y : ARENA.h / 2,
@@ -138,7 +142,7 @@ export class Game {
 
   addSugar(x, y) {
     if (this.sugars.length >= SUGAR_MAX) return false;
-    this.sugars.push({ x, y, phase: this.rng() * TAU, age: 0 });
+    this.sugars.push({ x, y, phase: this.rng() * TAU, age: 0, kind: this.nextKind() });
     this.events.push({ type: 'sugar', x, y });
     return true;
   }
@@ -149,10 +153,15 @@ export class Game {
       const x = m + this.rng() * (ARENA.w - 2 * m);
       const y = m + this.rng() * (ARENA.h - 2 * m);
       if (Math.hypot(x - this.fly.x, y - this.fly.y) > 110 || tries === 19) {
-        this.sugars.push({ x, y, phase: this.rng() * TAU, age: 0 });
+        this.sugars.push({ x, y, phase: this.rng() * TAU, age: 0, kind: this.nextKind() });
         return;
       }
     }
+  }
+
+  /** Token kind for a new food item: the stage the fly needs next is over-represented. */
+  nextKind() {
+    return this.rng() < 0.4 ? PIPELINE[this.pipeline] : PIPELINE[Math.floor(this.rng() * PIPELINE.length)];
   }
 
   /** Events since the last drain (eat, hit, fire, pulse, ...), for the renderers. */
@@ -340,11 +349,28 @@ export class Game {
     // gustatory input to the SEZ, dopamine burst in PAM
     this.network.kick(C.SEZ, 1.0);
     this.network.kick(C.PAM, 0.5 + reward);
-    this.events.push({ type: 'eat', x: sugar.x, y: sugar.y, energy: gain, reward, score: this.score });
+    this.events.push({ type: 'eat', x: sugar.x, y: sugar.y, energy: gain, reward, score: this.score, kind: sugar.kind });
+    this.advancePipeline(sugar);
     const gen = generationOf(this.score);
     if (gen > this.generation) {
       this.generation = gen;
       this.events.push({ type: 'levelup', generation: gen });
+    }
+  }
+
+  /** Vibecode pipeline: the right token advances it, a full pass is a "deployment". */
+  advancePipeline(sugar) {
+    if (sugar.kind === PIPELINE[this.pipeline]) {
+      this.pipeline++;
+      this.events.push({ type: 'stage', stage: sugar.kind, progress: this.pipeline / PIPELINE.length });
+      if (this.pipeline === PIPELINE.length) {
+        this.pipeline = 0;
+        this.deployments++;
+        this.network.kick(C.PAM, 1.0);
+        this.events.push({ type: 'deployed', deployments: this.deployments });
+      }
+    } else if (sugar.kind) {
+      this.events.push({ type: 'wrongStage', got: sugar.kind, need: PIPELINE[this.pipeline] });
     }
   }
 
