@@ -22,7 +22,6 @@ export const TOKEN_COLORS = {
   // web search
   [SEARCH_TOKEN]: '#22d3ee',
 };
-const RESULT_COLOR = '#e0f2fe';
 
 const TAU = Math.PI * 2;
 
@@ -126,7 +125,7 @@ export function createPlaygroundView(canvas) {
     const ch = ARENA.h / GRID;
     ctx.lineWidth = 1;
     for (let i = 1; i < GRID; i++) {
-      ctx.strokeStyle = i % 4 === 0 ? 'rgba(34,211,238,0.10)' : 'rgba(34,211,238,0.045)';
+      ctx.strokeStyle = i % 4 === 0 ? 'rgba(255,255,255,0.07)' : 'rgba(255,255,255,0.03)';
       ctx.beginPath();
       ctx.moveTo(i * cw, 0);
       ctx.lineTo(i * cw, ARENA.h);
@@ -136,17 +135,15 @@ export function createPlaygroundView(canvas) {
     }
     // the DNA grid cell the fly occupies (the 8 pose bits)
     const { gx, gy } = quantizePose(game.fly.x, game.fly.y, game.fly.theta);
-    ctx.fillStyle = 'rgba(217,70,239,0.08)';
+    ctx.fillStyle = 'rgba(245,165,36,0.06)';
     ctx.fillRect(gx * cw, gy * ch, cw, ch);
-    ctx.strokeStyle = 'rgba(217,70,239,0.35)';
+    ctx.strokeStyle = 'rgba(245,165,36,0.3)';
     ctx.strokeRect(gx * cw + 0.5, gy * ch + 0.5, cw - 1, ch - 1);
   }
 
   function drawBorder() {
     ctx.save();
-    ctx.shadowColor = 'rgba(34,211,238,0.9)';
-    ctx.shadowBlur = 18;
-    ctx.strokeStyle = 'rgba(34,211,238,0.55)';
+    ctx.strokeStyle = 'rgba(255,255,255,0.14)';
     ctx.lineWidth = 2;
     ctx.strokeRect(1, 1, ARENA.w - 2, ARENA.h - 2);
     ctx.restore();
@@ -190,7 +187,7 @@ export function createPlaygroundView(canvas) {
     ctx.rotate(time * 0.6 + s.phase);
     ctx.scale(pop, pop);
     ctx.shadowColor = '#fde047';
-    ctx.shadowBlur = 16 * pulse;
+    ctx.shadowBlur = 0;
     ctx.fillStyle = `rgba(254,240,138,${0.85 * pulse})`;
     ctx.beginPath();
     for (let k = 0; k < 6; k++) {
@@ -208,9 +205,9 @@ export function createPlaygroundView(canvas) {
   }
 
   function drawToken(s, need) {
-    const color = s.result ? RESULT_COLOR : (TOKEN_COLORS[s.kind] ?? '#ffffff');
     const pop = Math.min(1, s.age * 4);
     const next = s.kind === need || s.kind === SEARCH_TOKEN;
+    const color = next || s.result ? '#f5a524' : '#a1a1aa';
     const pulse = 0.7 + 0.3 * Math.sin(time * (next ? 7 : 3) + s.phase);
     const title = s.kind.length > 24 ? `${s.kind.slice(0, 23)}…` : s.kind;
     const label = s.result ? `📄 ${title}` : s.kind === SEARCH_TOKEN ? '🔎 Search' : mission === 'build' ? `＋ ${s.kind}` : `[${s.kind}]`;
@@ -220,8 +217,8 @@ export function createPlaygroundView(canvas) {
     ctx.font = '700 12px ui-monospace, SFMono-Regular, Menlo, monospace';
     const w = ctx.measureText(label).width + 12;
     ctx.shadowColor = color;
-    ctx.shadowBlur = (next ? 22 : 10) * pulse;
-    ctx.fillStyle = 'rgba(3,6,20,0.85)';
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = 'rgba(20,21,24,0.92)';
     ctx.strokeStyle = color;
     ctx.lineWidth = next ? 2 : 1.2;
     ctx.beginPath();
@@ -301,7 +298,7 @@ export function createPlaygroundView(canvas) {
       }
     }
     ctx.shadowColor = '#f43f5e';
-    ctx.shadowBlur = p.hunting ? 22 : 10;
+    ctx.shadowBlur = 0;
     ctx.fillStyle = '#1c0710';
     ctx.beginPath();
     ctx.ellipse(-11, 0, 13, 10.5, 0, 0, TAU);
@@ -485,7 +482,7 @@ export function createPlaygroundView(canvas) {
       const glow = Math.min(1, level);
       ctx.save();
       ctx.shadowColor = '#22d3ee';
-      ctx.shadowBlur = 10 * glow;
+      ctx.shadowBlur = 0;
       ctx.fillStyle = `rgba(103,232,249,${0.35 + 0.65 * glow})`;
       ctx.beginPath();
       ctx.arc(tipX, tipY, 1.3 + 1.6 * glow, 0, TAU);
@@ -592,7 +589,7 @@ export function createPlaygroundView(canvas) {
       ctx.globalAlpha = 1 - k * k;
       ctx.font = t.big ? '800 44px ui-sans-serif, system-ui, sans-serif' : '700 15px ui-monospace, SFMono-Regular, Menlo, monospace';
       ctx.shadowColor = t.color;
-      ctx.shadowBlur = 12;
+      ctx.shadowBlur = 0;
       ctx.fillStyle = t.color;
       ctx.fillText(t.text, t.x, t.y - k * (t.big ? 30 : 36));
     }
@@ -602,7 +599,7 @@ export function createPlaygroundView(canvas) {
   function draw(game, dt) {
     time += dt;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.fillStyle = '#03040b';
+    ctx.fillStyle = '#0c0d0f';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     const { scale, ox, oy } = layout();
     ctx.setTransform(scale * dpr, 0, 0, scale * dpr, ox * dpr, oy * dpr);
@@ -610,10 +607,7 @@ export function createPlaygroundView(canvas) {
     ctx.beginPath();
     ctx.rect(0, 0, ARENA.w, ARENA.h);
     ctx.clip();
-    const bg = ctx.createRadialGradient(ARENA.w / 2, ARENA.h / 2, 40, ARENA.w / 2, ARENA.h / 2, ARENA.w * 0.7);
-    bg.addColorStop(0, '#0b1024');
-    bg.addColorStop(1, '#04050d');
-    ctx.fillStyle = bg;
+    ctx.fillStyle = '#141518';
     ctx.fillRect(0, 0, ARENA.w, ARENA.h);
     drawGrid(game);
     drawOdor(game);

@@ -65,8 +65,10 @@ uniform vec4 uWave[${MAX_WAVES}];      // xyz origin, w start time
 uniform vec4 uWaveColor[${MAX_WAVES}]; // rgb color, a strength
 uniform float uWaveSpeed;
 uniform float uIntensity;
+uniform float uReal;       // 0 model animation .. 1 real FlyWire spikes
 
 attribute float aCluster;
+attribute float aSpike;    // filtered firing rate of this point's FlyWire neuron (1 = 40 Hz)
 attribute float aPhase;
 attribute float aSize;
 
@@ -93,6 +95,18 @@ void main() {
     + spike * (0.25 + 1.4 * act);
   vec3 col = base * fire;
 
+  // real mode (brain points only; clusters 13-15 are the VNC, outside FlyWire):
+  // a dim resting brain in which each neuron flashes when it actually fires
+  float real = uReal * step(aCluster, 12.5);
+  if (real > 0.0) {
+    float s = min(aSpike, 1.0);
+    float rest = 0.05 + 0.05 * smoothstep(0.2, 0.95, slow);
+    float fireReal = rest + s * 1.9 + act * 0.12;
+    vec3 colReal = base * rest + mix(base, vec3(1.0, 0.8, 0.52), 0.55) * s * 1.9;
+    fire = mix(fire, fireReal, real);
+    col = mix(col, colReal, real);
+  }
+
   // expanding wave fronts: bright shells travelling outward from each origin
   for (int i = 0; i < ${MAX_WAVES}; i++) {
     float dt = uTime - uWave[i].w;
@@ -116,6 +130,9 @@ void main() {
   // capped: tens of thousands of additive sprites overlap on screen, so a
   // per-neuron flare must stay a few x baseline or dense regions clip to white
   vAlpha = clamp(0.12 + fire * 0.3, 0.0, 0.5);
+  // real mode: resting neurons are faint dust, firing ones stand out
+  float realA = uReal * step(aCluster, 12.5);
+  vAlpha = mix(vAlpha, clamp(0.035 + min(aSpike, 1.0) * 0.55, 0.0, 0.6), realA);
 }
 `;
 
@@ -141,6 +158,7 @@ uniform float uTime;
 uniform vec3 uPulse[${MAX_EDGES}]; // x start time, y duration, z strength
 uniform float uGain[${MAX_EDGES}];
 uniform float uFlash[${MAX_EDGES}];
+uniform float uDim;
 
 attribute float aT;
 attribute float aEdge;
@@ -160,7 +178,7 @@ void main() {
   }
   float fdt = uTime - uFlash[ei];
   float flash = fdt > 0.0 ? exp(-fdt * 1.3) * (0.65 + 0.35 * sin(aT * 42.0 - uTime * 14.0)) : 0.0;
-  vIntensity = 0.02 + 0.07 * uGain[ei] + packet * 1.6 + flash * 1.2;
+  vIntensity = (0.02 + 0.07 * uGain[ei] + packet * 1.6 + flash * 1.2) * uDim;
   vColor = color;
   gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
 }

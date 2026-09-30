@@ -94,6 +94,22 @@ describe('fly server', () => {
     expect(missingApi.status).toBe(404);
   });
 
+  it('revalidates non-hashed files with an ETag (the connectome is 7.7 MB)', async () => {
+    const dir = fakeDist();
+    mkdirSync(join(dir, 'connectome'));
+    writeFileSync(join(dir, 'connectome', 'flywire783.bin.gz'), Buffer.from([0x1f, 0x8b, 0, 0]));
+    const { handle } = createFlyServer({ distDir: dir, env: {} });
+    const first = await call({ handle }, 'HEAD', '/connectome/flywire783.bin.gz');
+    expect(first.status).toBe(200);
+    expect(first.headers['content-type']).toBe('application/gzip');
+    expect(first.headers['content-encoding']).toBeUndefined();
+    expect(first.headers.etag).toMatch(/^".+"$/);
+    const again = await call({ handle }, 'HEAD', '/connectome/flywire783.bin.gz', undefined, { 'if-none-match': first.headers.etag });
+    expect(again.status).toBe(304);
+    const asset = await call({ handle }, 'HEAD', '/assets/app.js');
+    expect(asset.headers['cache-control']).toMatch(/immutable/);
+  });
+
   it('refuses real builds without a token (the game falls back to the hand-off)', async () => {
     const { handle } = createFlyServer({ distDir: fakeDist(), env: {} });
     const r = await call({ handle }, 'POST', '/api/fly-apps', { dna: DNA });

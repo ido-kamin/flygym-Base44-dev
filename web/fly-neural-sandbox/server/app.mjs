@@ -27,6 +27,7 @@ const MIME = {
   '.css': 'text/css; charset=utf-8',
   '.json': 'application/json; charset=utf-8',
   '.bin': 'application/octet-stream',
+  '.gz': 'application/gzip', // served as-is; the client inflates it (no Content-Encoding)
   '.svg': 'image/svg+xml',
   '.png': 'image/png',
   '.ico': 'image/x-icon',
@@ -229,10 +230,17 @@ export function createFlyServer({ distDir, env = process.env, fetchImpl = fetch,
       return res.end('The fly is still hatching (building the game)… refresh in a few seconds.');
     }
     const immutable = path.startsWith('/assets/');
+    // revalidated files (index.html, the 7.7 MB connectome, meshes) get an ETag so repeat visits are a 304
+    const etag = `"${info.size.toString(36)}-${Math.floor(info.mtimeMs).toString(36)}"`;
+    if (!immutable && req.headers['if-none-match'] === etag) {
+      res.writeHead(304, { etag, 'cache-control': 'no-cache' });
+      return res.end();
+    }
     res.writeHead(200, {
       'content-type': MIME[extname(file)] ?? 'application/octet-stream',
       'content-length': info.size,
       'cache-control': immutable ? 'public, max-age=31536000, immutable' : 'no-cache',
+      etag,
       'x-content-type-options': 'nosniff',
     });
     if (req.method === 'HEAD') return res.end();

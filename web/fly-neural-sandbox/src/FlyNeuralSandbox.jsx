@@ -1,10 +1,11 @@
 // Fly Neural Sandbox: the top-level game component.
 //
 // React owns lifecycle and UI only. The simulation (Game), the 3D brain
-// (BrainRenderer), the 3D NeuroMechFly body (FlyBody3D) and the fly-driven
-// browser view are plain objects kept in a ref and driven by one
-// requestAnimationFrame loop; the HUD is refreshed from a snapshot ~10x per
-// second, and the Base44 DNA (+ mission + name) is mirrored into the URL hash.
+// (BrainRenderer), the NeuroMechFly world (FlyBody3D), the mission map and the
+// real FlyWire brain (RealBrain, a whole-brain LIF model in a Web Worker) are
+// plain objects kept in a ref and driven by one requestAnimationFrame loop; the
+// HUD is refreshed from a snapshot ~10x per second, and the Base44 DNA
+// (+ mission + name) is mirrored into the URL hash.
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 
@@ -38,10 +39,11 @@ import { C } from './lib/connectome.js';
 import { createPlaygroundView } from './lib/drawPlayground.js';
 import { FlyTerminal, statusFor } from './lib/flycode.js';
 import { FlyBody3D } from './lib/flyBody3D.js';
-import { Game, MISSIONS, PREDATOR_MAX } from './lib/game.js';
+import { Game, MAX_SPEED, MAX_TURN, MISSIONS, PREDATOR_MAX } from './lib/game.js';
 import { GENES, mulberry32, personality } from './lib/genome.js';
 import { loadNeuroMechFly } from './lib/neuromechfly.js';
 import { levelOf, loadProfile, MISSION_META, randomFlyName, saveProfile, XP } from './lib/progress.js';
+import { RealBrain } from './lib/realBrain.js';
 import { nextQuery, searchWeb } from './lib/webSearch.js';
 
 const HUD_INTERVAL = 0.1; // s
@@ -52,6 +54,8 @@ const STATUS_MIN_MS = 2400; // keep a status line up at least this long
 const TERMINAL_LINE_MS = 110; // at most ~9 log lines per second
 const TRAIN_COOLDOWN_MS = 450;
 const VNC_CLUSTERS = [C.T1, C.T2, C.T3];
+const SENSE_INTERVAL = 0.05; // s, senses -> real brain at 20 Hz
+const REAL_HZ_FULL = 12; // a region's mean rate (Hz) shown as fully active
 
 function hashParams(hash) {
   try {
@@ -146,6 +150,8 @@ function snapshot(game, engine) {
     predators: game.predators.length,
     fps: engine.fps,
     changedGenes: engine.changedUntil > performance.now() ? engine.changedGenes : [],
+    behaviour: game.behaviour,
+    byBrain: Boolean(game.brainMotor),
     holding: engine.holdUntil > performance.now(),
     pipeline: game.pipeline,
     deployments: game.deployments,
@@ -176,6 +182,11 @@ function updateStatus(engine, game, activity, now) {
 function withVncRhythm(engine, activity) {
   const out = (engine.shownActivity ??= new Float32Array(activity.length));
   out.set(activity);
+  // brain regions: the real connectome's mean firing rates, once it runs
+  const clusters = engine.real?.frame?.clusters;
+  if (clusters) {
+    for (let c = 0; c < C.T1; c++) out[c] = Math.max(0.3 * activity[c], Math.min(1.5, clusters[c] / REAL_HZ_FULL));
+  }
   const rhythm = engine.body?.rhythm;
   if (rhythm) {
     VNC_CLUSTERS.forEach((c, k) => {
@@ -220,7 +231,8 @@ export default function FlyNeuralSandbox() {
   const [toast, setToast] = useState(null);
   const [copied, setCopied] = useState(false);
   const [bodyStatus, setBodyStatus] = useState('loading');
-  const [playback, setPlayback] = useState(0.25);
+  const [playback, setPlayback] = useState(1);
+  const [real, setReal] = useState({ status: 'loading', progress: 0 });
   const [mission, setMissionState] = useState(() => readMission(window.location.hash) ?? 'build');
   const [profile, setProfile] = useState(() => {
     const p = loadProfile();
@@ -286,6 +298,9 @@ export default function FlyNeuralSandbox() {
       searching: false,
       rng: mulberry32((Math.random() * 2 ** 32) >>> 0),
       lastTrainAt: 0,
+      real: null,
+      senseClock: 0,
+      timeScale: 1,
     };
     engineRef.current = engine;
     game.setMission(engine.mission);
@@ -305,16 +320,46 @@ export default function FlyNeuralSandbox() {
 
     // the NeuroMechFly body streams in after the brain (~1 MB of meshes)
     let disposed = false;
+    const onFloorClick = (x, y) => {
+      if (game.over) return;
+      if (armedRef.current) {
+        if (!game.addPredator(x, y)) showToast(`Max ${PREDATOR_MAX} spiders — that's plenty`, 'warn');
+      } else if (!game.addSugar(x, y)) {
+        showToast('The arena is full already', 'info');
+      }
+    };
     loadNeuroMechFly(import.meta.env.BASE_URL)
       .then((asset) => {
         if (disposed) return;
-        engine.body = new FlyBody3D(bodyHostRef.current, asset);
+        engine.body = new FlyBody3D(bodyHostRef.current, asset, { onFloorClick });
+        engine.body.setPlayback(engine.timeScale);
         setBodyStatus('ready');
       })
       .catch((err) => {
         console.error('NeuroMechFly body failed to load', err);
         if (!disposed) setBodyStatus('error');
       });
+
+    // the real FlyWire brain: 7.7 MB of connectome, simulated in a worker
+    let lastProgress = 0;
+    engine.real = new RealBrain({
+      baseUrl: import.meta.env.BASE_URL,
+      onProgress: (p) => {
+        if (p - lastProgress > 0.02) {
+          lastProgress = p;
+          setReal({ status: 'loading', progress: p });
+        }
+      },
+      onReady: (m) => {
+        brain.setConnectome(m.cluster);
+        setReal({ status: 'ready', progress: 1, n: m.n, nnz: m.nnz });
+      },
+      onFrame: (m) => brain.setSpikes(m.activity),
+      onError: (err) => {
+        console.warn('FlyWire connectome unavailable, using the 16-region model', err);
+        if (!disposed) setReal({ status: 'error', progress: 0 });
+      },
+    });
 
     const gainXp = (amount) => {
       const before = levelOf(engine.profile.xp);
@@ -344,6 +389,7 @@ export default function FlyNeuralSandbox() {
 
     let raf = 0;
     let last = performance.now();
+    let realClock = 0;
     let hudClock = 0;
     // write the hash on the first frame, not at mount: under StrictMode's dev
     // double-mount the second pass would otherwise "decode" this fly's own DNA
@@ -354,13 +400,30 @@ export default function FlyNeuralSandbox() {
     const tick = (now) => {
       const elapsed = Math.max(0, (now - last) / 1000);
       // clamp the simulated step so a stalled tab resumes in slow motion, not a teleport
-      const dt = Math.min(0.1, elapsed);
+      const wallDt = Math.min(0.1, elapsed);
+      // slow motion slows the whole world, not just the legs
+      const dt = wallDt * engine.timeScale;
       last = now;
 
+      // the real brain's descending neurons steer the fly and trigger its escapes
+      const rb = engine.real;
+      game.brainMotor = rb?.ready ? rb.motor(dt) : null;
       if (now >= engine.holdUntil) game.advance(dt);
       const events = game.drainEvents();
       brain.consume(events);
       view.consume(events);
+      engine.body?.consume(events);
+      if (rb?.ready) {
+        engine.senseClock += dt;
+        if (engine.senseClock >= SENSE_INTERVAL) {
+          rb.sense(game.sensors, engine.senseClock, { speed: game.fly.v / MAX_SPEED, turn: game.fly.omega / MAX_TURN });
+          engine.senseClock = 0;
+        }
+        for (const ev of events) {
+          if (ev.type === 'eat') rb.tasteSugar();
+          else if (ev.type === 'bump' || ev.type === 'hit') rb.bump();
+        }
+      }
       for (const ev of events) {
         engine.terminal.event(ev);
         switch (ev.type) {
@@ -420,7 +483,13 @@ export default function FlyNeuralSandbox() {
         fpsFrames = 0;
         fpsClock = 0;
       }
-      hudClock += dt;
+      hudClock += wallDt;
+      realClock += wallDt;
+      if (realClock >= 0.25 && rb?.frame) {
+        realClock = 0;
+        const f = rb.frame;
+        setReal((r) => (r.status === 'ready' ? { ...r, stats: f.stats, groups: f.groups } : r));
+      }
       if (hudClock >= HUD_INTERVAL) {
         hudClock = 0;
         updateStatus(engine, game, brain.act, now);
@@ -428,7 +497,7 @@ export default function FlyNeuralSandbox() {
         setStats({ ...engine.stats });
         setProfile((p) => (p.xp === engine.profile.xp && p.name === engine.profile.name ? p : engine.profile));
       }
-      hashClock += dt;
+      hashClock += wallDt;
       if (hashClock >= HASH_INTERVAL) {
         hashClock = 0;
         writeHash(engine, game.toDNA());
@@ -463,6 +532,7 @@ export default function FlyNeuralSandbox() {
       cancelAnimationFrame(raf);
       window.removeEventListener('hashchange', onHashChange);
       engine.body?.dispose();
+      engine.real?.dispose();
       brain.dispose();
       view.dispose();
       engineRef.current = null;
@@ -626,7 +696,10 @@ export default function FlyNeuralSandbox() {
   const pick = useCallback((x, y) => engineRef.current?.brain.pick(x, y) ?? null, []);
 
   useEffect(() => {
-    engineRef.current?.body?.setPlayback(playback);
+    const e = engineRef.current;
+    if (!e) return;
+    e.timeScale = playback;
+    e.body?.setPlayback(playback);
   }, [playback, bodyStatus]);
 
   // keyboard shortcuts (ignored while typing a name)
@@ -653,7 +726,7 @@ export default function FlyNeuralSandbox() {
   const share = hud && engineRef.current ? shareUrl(engineRef.current, hud.dna) : '';
 
   return (
-    <div className="min-h-screen bg-void bg-[radial-gradient(ellipse_at_top_left,rgba(34,211,238,0.10),transparent_45%),radial-gradient(ellipse_at_bottom_right,rgba(232,121,249,0.10),transparent_45%)] text-slate-200 lg:flex lg:h-screen lg:flex-col">
+    <div className="min-h-screen bg-void text-neutral-200 lg:flex lg:h-screen lg:flex-col">
       {hud && (
         <TopBar
           hud={hud}
@@ -666,26 +739,20 @@ export default function FlyNeuralSandbox() {
         />
       )}
 
-      <main className="grid flex-1 gap-3 p-3 lg:min-h-0 lg:grid-cols-[minmax(0,1fr)_minmax(300px,27vw)]">
-        <div className="flex min-h-0 flex-col gap-3">
-          <MissionStage
-            ref={canvasRef}
-            mission={mission}
-            hud={hud ?? { dna: '' }}
-            searchQuery={searchQuery}
-            armed={armed}
-            onPointerDown={onPlaygroundDown}
-            onPointerMove={onPlaygroundMove}
-            onPointerLeave={onPlaygroundLeave}
-          >
-            {hud && (
-              <>
-                <FlyStatus status={hud.status} />
-                <FlyCodeTerminal dna={hud.dna} weights={hud.weights} lines={hud.terminal} mission={mission} />
-              </>
-            )}
+      <main className="grid flex-1 gap-2 p-2 lg:min-h-0 lg:grid-cols-[minmax(0,1fr)_minmax(340px,32vw)]">
+        <div className="flex min-h-0 flex-col gap-2">
+          <div className="relative flex min-h-0 flex-1 flex-col">
+            <BodyView
+              ref={bodyHostRef}
+              status={bodyStatus}
+              playback={playback}
+              onPlayback={setPlayback}
+              behaviour={hud?.behaviour}
+              byBrain={hud?.byBrain}
+              armed={armed}
+            />
             {hud?.over && <GameOverOverlay hud={hud} onRestart={onRestart} onMutateRetry={onMutateRetry} onCopy={onCopy} />}
-          </MissionStage>
+          </div>
           {hud && (
             <BottomDock
               hud={hud}
@@ -702,9 +769,25 @@ export default function FlyNeuralSandbox() {
           )}
         </div>
 
-        <aside className="grid min-h-0 gap-3 lg:grid-rows-[minmax(0,1fr)_minmax(0,1fr)]">
-          <BodyView ref={bodyHostRef} status={bodyStatus} playback={playback} onPlayback={setPlayback} />
-          <BrainView ref={brainHostRef} activity={hud?.activity ?? []} pick={pick} holding={hud?.holding} />
+        <aside className="grid min-h-0 gap-2 lg:grid-rows-[minmax(0,1.15fr)_minmax(0,1fr)]">
+          <BrainView ref={brainHostRef} activity={hud?.activity ?? []} pick={pick} holding={hud?.holding} real={real} />
+          <MissionStage
+            ref={canvasRef}
+            mission={mission}
+            hud={hud ?? { dna: '' }}
+            searchQuery={searchQuery}
+            armed={armed}
+            onPointerDown={onPlaygroundDown}
+            onPointerMove={onPlaygroundMove}
+            onPointerLeave={onPlaygroundLeave}
+          >
+            {hud && (
+              <>
+                <FlyStatus status={hud.status} />
+                <FlyCodeTerminal dna={hud.dna} weights={hud.weights} lines={hud.terminal} mission={mission} />
+              </>
+            )}
+          </MissionStage>
         </aside>
       </main>
 
@@ -716,7 +799,7 @@ export default function FlyNeuralSandbox() {
                 type="button"
                 onClick={() => setClaimOpen(true)}
                 data-testid="claim-deployment"
-                className="mt-2 w-full rounded-xl border border-[#3b7bff]/70 bg-[#0052ff]/20 px-4 py-2.5 text-xs font-black uppercase tracking-[0.14em] text-white shadow-[0_0_20px_-6px_rgba(0,82,255,0.9)] transition hover:bg-[#0052ff]/35 active:scale-[0.98]"
+                className="mt-2 w-full rounded-lg bg-[#0052ff] px-4 py-2.5 text-xs font-semibold text-white transition hover:brightness-110 active:scale-[0.98]"
               >
                 ⛓ Claim Fly&apos;s Deployment
               </button>

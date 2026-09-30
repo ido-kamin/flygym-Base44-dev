@@ -47,7 +47,7 @@ export class BrainRenderer {
 
     const renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: 'high-performance' });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
-    renderer.setClearColor(0x02030a, 1);
+    renderer.setClearColor(0x030304, 1);
     // ACES keeps saturated neon hues instead of clipping dense regions to white
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 1.1;
@@ -82,7 +82,7 @@ export class BrainRenderer {
 
     const composer = new EffectComposer(renderer);
     composer.addPass(new RenderPass(scene, camera));
-    this.bloom = new UnrealBloomPass(new THREE.Vector2(256, 256), 1.05, 0.5, 0.1);
+    this.bloom = new UnrealBloomPass(new THREE.Vector2(256, 256), 0.6, 0.35, 0.3);
     composer.addPass(this.bloom);
     composer.addPass(new OutputPass());
     this.composer = composer;
@@ -99,6 +99,11 @@ export class BrainRenderer {
     g.setAttribute('aCluster', new THREE.BufferAttribute(brain.cluster, 1));
     g.setAttribute('aPhase', new THREE.BufferAttribute(brain.phase, 1));
     g.setAttribute('aSize', new THREE.BufferAttribute(brain.size, 1));
+    // live firing of the real FlyWire neuron behind each point (0..255, see setConnectome)
+    this.spikes = new Uint8Array(brain.count);
+    this.spikeAttr = new THREE.BufferAttribute(this.spikes, 1, true);
+    this.spikeAttr.setUsage(THREE.DynamicDrawUsage);
+    g.setAttribute('aSpike', this.spikeAttr);
     g.computeBoundingSphere();
     this.neuronUniforms = {
       uTime: { value: 0 },
@@ -109,6 +114,7 @@ export class BrainRenderer {
       uWaveColor: { value: Array.from({ length: MAX_WAVES }, () => new THREE.Vector4(0, 0, 0, 0)) },
       uWaveSpeed: { value: 5.5 },
       uIntensity: { value: 0.6 },
+      uReal: { value: 0 },
     };
     const m = new THREE.ShaderMaterial({
       uniforms: this.neuronUniforms,
@@ -132,6 +138,7 @@ export class BrainRenderer {
       uPulse: { value: Array.from({ length: MAX_EDGES }, () => new THREE.Vector3(-1e4, 1, 0)) },
       uGain: { value: new Float32Array(MAX_EDGES).fill(0.5) },
       uFlash: { value: new Float32Array(MAX_EDGES).fill(-1e4) },
+      uDim: { value: 1 }, // the model's tracts step back once real spikes are shown
     };
     const m = new THREE.ShaderMaterial({
       uniforms: this.tractUniforms,
@@ -154,6 +161,43 @@ export class BrainRenderer {
     const pr = this.renderer.getPixelRatio();
     // gl_PointSize is in framebuffer pixels: world size * (half framebuffer height / tan(fov/2)) / depth
     this.neuronUniforms.uScale.value = (h * pr * 0.5) / Math.tan((this.camera.fov * Math.PI) / 360);
+  }
+
+  /**
+   * Bind the real connectome: every brain point stands for one FlyWire neuron
+   * of the same region (points and neurons of a region are matched in order;
+   * where a region has more points than neurons, neurons repeat). VNC points
+   * keep the model's activity (FlyWire is the brain only).
+   * @param {Uint8Array} neuronCluster  cluster of each connectome neuron
+   */
+  setConnectome(neuronCluster) {
+    const byCluster = Array.from({ length: CLUSTER_COUNT }, () => []);
+    neuronCluster.forEach((c, i) => byCluster[c]?.push(i));
+    const count = this.brain.count;
+    const map = new Int32Array(count).fill(-1);
+    const seen = new Int32Array(CLUSTER_COUNT);
+    const points = new Int32Array(CLUSTER_COUNT);
+    const cl = this.brain.cluster;
+    for (let i = 0; i < count; i++) points[cl[i]]++;
+    for (let i = 0; i < count; i++) {
+      const c = cl[i];
+      const list = byCluster[c];
+      if (list.length) map[i] = list[Math.floor((seen[c]++ * list.length) / points[c])];
+    }
+    this.pointNeuron = map;
+    this.realTarget = 1;
+  }
+
+  /** Per-neuron activity from the LIF worker (Uint8 per connectome neuron). */
+  setSpikes(activity) {
+    const map = this.pointNeuron;
+    if (!map) return;
+    const out = this.spikes;
+    for (let i = 0; i < map.length; i++) {
+      const j = map[i];
+      out[i] = j >= 0 ? activity[j] : 0;
+    }
+    this.spikeAttr.needsUpdate = true;
   }
 
   /** Queue a wave front from a cluster centroid after `delay` seconds. */
@@ -272,6 +316,9 @@ export class BrainRenderer {
       }
     }
 
+    const real = this.neuronUniforms.uReal;
+    real.value += ((this.realTarget ?? 0) - real.value) * Math.min(1, dt * 1.5);
+    this.tractUniforms.uDim.value = 1 - 0.65 * real.value;
     this.neuronUniforms.uTime.value = this.time;
     this.tractUniforms.uTime.value = this.time;
     this.controls.update(dt);

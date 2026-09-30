@@ -33,39 +33,39 @@ export default function HatchScreen({ defaultName, adopting, dna, defaultMission
   };
 
   return (
-    <div className="fixed inset-0 z-50 grid place-items-center overflow-y-auto bg-black/55 p-4 backdrop-blur-md">
+    <div className="fixed inset-0 z-50 grid place-items-center overflow-y-auto bg-black/70 p-4 backdrop-blur-sm">
       <form
         onSubmit={submit}
         data-testid="hatch-screen"
-        className="w-full max-w-2xl rounded-3xl border border-fuchsia-300/40 bg-[#070a18]/95 p-6 shadow-[0_0_80px_-10px_rgba(232,121,249,0.7)] sm:p-8"
+        className="w-full max-w-2xl rounded-2xl border border-white/10 bg-panel p-6 sm:p-8"
       >
         <div className="text-center">
-          <div className="mx-auto grid size-16 animate-bump place-items-center rounded-2xl border border-fuchsia-300/50 bg-fuchsia-500/15 text-4xl shadow-[0_0_30px_rgba(232,121,249,0.6)]">
+          <div className="mx-auto grid size-14 place-items-center rounded-xl bg-raised text-3xl">
             🪰
           </div>
-          <h1 className="mt-4 bg-gradient-to-r from-cyan-200 via-fuchsia-200 to-orange-200 bg-clip-text text-3xl font-black tracking-tight text-transparent sm:text-4xl">
+          <h1 className="mt-4 text-3xl font-semibold tracking-tight text-white sm:text-4xl">
             {adopting ? 'Adopt this fly' : 'Hatch your fly'}
           </h1>
-          <p className="mx-auto mt-2 max-w-md text-sm text-slate-400">
+          <p className="mx-auto mt-2 max-w-md text-sm text-neutral-400">
             {adopting ? (
               <>
-                Someone shared fly <span className="font-mono text-fuchsia-200">{dna}</span> with you. Same brain, same
+                Someone shared fly <span className="font-mono text-accent">{dna}</span> with you. Same brain, same
                 personality: can you beat its score?
               </>
             ) : (
-              'A real fruit-fly body with 161,555 simulated neurons. Train it, send it on missions, share its DNA.'
+              'A real fruit-fly body driven by the whole FlyWire brain: 138,639 neurons, spiking live. Train it, send it on missions, share its DNA.'
             )}
           </p>
         </div>
 
         <label className="mt-6 block">
-          <span className="text-[11px] font-bold uppercase tracking-[0.2em] text-slate-400">Name</span>
+          <span className="text-[11px] font-bold uppercase tracking-wider text-neutral-400">Name</span>
           <div className="mt-1.5 flex gap-2">
             <input
               value={name}
               onChange={(e) => setName(e.target.value.slice(0, 32))}
               data-testid="fly-name"
-              className="flex-1 rounded-xl border border-white/15 bg-black/50 px-4 py-3 text-lg font-bold text-white outline-none focus:border-fuchsia-300"
+              className="flex-1 rounded-xl border border-white/10 bg-void px-4 py-3 text-lg font-bold text-white outline-none focus:border-accent"
               aria-label="Fly name"
             />
             <button
@@ -82,7 +82,7 @@ export default function HatchScreen({ defaultName, adopting, dna, defaultMission
 
         {!adopting && (
           <fieldset className="mt-5">
-            <legend className="text-[11px] font-bold uppercase tracking-[0.2em] text-slate-400">Starter brain</legend>
+            <legend className="text-[11px] font-bold uppercase tracking-wider text-neutral-400">Starter brain</legend>
             <div className="mt-1.5 grid grid-cols-3 gap-2">
               {STARTERS.map((s) => {
                 const p = personality(s.weights);
@@ -93,13 +93,13 @@ export default function HatchScreen({ defaultName, adopting, dna, defaultMission
                     type="button"
                     onClick={() => setStarter(s.key)}
                     aria-pressed={on}
-                    className={`rounded-2xl border p-3 text-left transition ${
-                      on ? 'border-fuchsia-300 bg-fuchsia-500/15 shadow-[0_0_24px_-6px_rgba(232,121,249,0.9)]' : 'border-white/10 bg-white/[0.03] hover:border-white/30'
+                    className={`rounded-xl border p-3 text-left transition ${
+                      on ? 'border-accent bg-accent/10' : 'border-white/10 bg-white/[0.02] hover:border-white/25'
                     }`}
                   >
                     <div className="text-2xl">{s.egg}</div>
-                    <div className="mt-1 text-sm font-black text-white">{s.label}</div>
-                    <div className="text-[11px] leading-snug text-slate-400">
+                    <div className="mt-1 text-sm font-semibold text-white">{s.label}</div>
+                    <div className="text-[11px] leading-snug text-neutral-400">
                       {p.emoji} {p.title}
                     </div>
                   </button>
@@ -110,7 +110,7 @@ export default function HatchScreen({ defaultName, adopting, dna, defaultMission
         )}
 
         <fieldset className="mt-5">
-          <legend className="text-[11px] font-bold uppercase tracking-[0.2em] text-slate-400">First mission</legend>
+          <legend className="text-[11px] font-bold uppercase tracking-wider text-neutral-400">First mission</legend>
           <div className="mt-1.5 grid grid-cols-2 gap-2">
             {Object.entries(MISSION_META).map(([key, m]) => {
               const on = mission === key;
@@ -121,13 +121,12 @@ export default function HatchScreen({ defaultName, adopting, dna, defaultMission
                   onClick={() => setMission(key)}
                   aria-pressed={on}
                   data-testid={`mission-${key}`}
-                  className={`rounded-2xl border p-3 text-left transition ${on ? 'bg-white/10' : 'border-white/10 bg-white/[0.03] hover:border-white/30'}`}
-                  style={on ? { borderColor: m.color, boxShadow: `0 0 24px -6px ${m.color}` } : undefined}
+                  className={`rounded-xl border p-3 text-left transition ${on ? 'border-accent bg-accent/10' : 'border-white/10 bg-white/[0.02] hover:border-white/25'}`}
                 >
-                  <div className="text-sm font-black text-white">
+                  <div className="text-sm font-semibold text-white">
                     {m.icon} {m.label}
                   </div>
-                  <div className="mt-0.5 text-[11px] leading-snug text-slate-400">{MISSION_BLURB[key]}</div>
+                  <div className="mt-0.5 text-[11px] leading-snug text-neutral-400">{MISSION_BLURB[key]}</div>
                 </button>
               );
             })}
@@ -137,9 +136,9 @@ export default function HatchScreen({ defaultName, adopting, dna, defaultMission
         <button
           type="submit"
           data-testid="hatch"
-          className="mt-6 w-full rounded-2xl border border-fuchsia-200/70 bg-gradient-to-r from-cyan-500/40 via-fuchsia-500/40 to-orange-500/40 px-6 py-4 text-lg font-black uppercase tracking-[0.2em] text-white shadow-[0_0_40px_-8px_rgba(232,121,249,0.9)] transition hover:brightness-125 active:scale-[0.98]"
+          className="mt-6 w-full rounded-xl bg-accent px-6 py-3.5 text-base font-semibold text-neutral-950 transition hover:brightness-110 active:scale-[0.99]"
         >
-          {adopting ? '🧬 Adopt & play' : '🐣 Hatch!'}
+          {adopting ? 'Adopt & play' : 'Hatch'}
         </button>
       </form>
     </div>

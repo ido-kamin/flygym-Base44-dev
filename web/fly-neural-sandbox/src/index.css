@@ -1,8 +1,10 @@
 @import 'tailwindcss';
 
 @theme {
-  --color-void: #02030a;
-  --color-panel: #070a18;
+  --color-void: #0c0d0f;
+  --color-panel: #141518;
+  --color-raised: #1b1c20;
+  --color-accent: #f5a524;
   --color-neon-cyan: #22d3ee;
   --color-neon-blue: #3b82f6;
   --color-neon-magenta: #e879f9;
@@ -23,9 +25,8 @@
 
   @keyframes dna-flash {
     0% {
-      color: #ffffff;
-      text-shadow: 0 0 14px #e879f9, 0 0 30px #22d3ee;
-      transform: translateY(-3px) scale(1.22);
+      color: #f5a524;
+      transform: translateY(-2px);
     }
     100% {
       transform: none;
@@ -33,8 +34,8 @@
   }
   @keyframes bump {
     0% {
-      transform: scale(1.35);
-      color: #fde047;
+      transform: scale(1.15);
+      color: #f5a524;
     }
     100% {
       transform: scale(1);
@@ -70,7 +71,7 @@
   }
   @keyframes pulse-red {
     50% {
-      box-shadow: 0 0 18px 2px rgba(244, 63, 94, 0.75);
+      opacity: 0.55;
     }
   }
 }
@@ -83,6 +84,8 @@ body,
 
 body {
   background: var(--color-void);
+  color: #e6e7e9;
+  font-family: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
   -webkit-font-smoothing: antialiased;
 }
 

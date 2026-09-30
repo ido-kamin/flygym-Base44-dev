@@ -1,27 +1,48 @@
-/** Host for the NeuroMechFly body renderer (created imperatively by FlyBody3D). */
-export default function BodyView({ ref, status, playback, onPlayback }) {
-  return (
-    <section className="relative min-h-[38vh] overflow-hidden rounded-2xl border border-orange-400/25 bg-void shadow-[0_0_50px_-20px_rgba(251,146,60,0.55)] lg:min-h-0">
-      <div ref={ref} className="absolute inset-0 cursor-grab active:cursor-grabbing" />
+const BEHAVIOUR = {
+  explore: { text: 'Exploring', note: 'walking on its own', dot: 'bg-neutral-300' },
+  forage: { text: 'Foraging', note: 'hungry — following the scent', dot: 'bg-accent' },
+  flee: { text: 'Escaping', note: 'giant fiber fired — jump!', dot: 'bg-rose-500' },
+  feed: { text: 'Feeding', note: 'proboscis on the sugar', dot: 'bg-accent' },
+  groom: { text: 'Grooming', note: 'cleaning its antennae', dot: 'bg-sky-400' },
+};
 
-      <div className="pointer-events-none absolute left-3 top-3 flex flex-col gap-1">
-        <span className="text-[10px] font-black uppercase tracking-[0.3em] text-orange-200/90">Body · NeuroMechFly v2</span>
-        <span className="font-mono text-[10px] text-slate-500">
-          flygym CPG 12 Hz · tripod gait · 42 actuated DoFs
-        </span>
+const SPEEDS = [
+  [0.25, '¼×'],
+  [0.5, '½×'],
+  [1, '1×'],
+];
+
+/**
+ * The world: host for the NeuroMechFly arena renderer (created imperatively
+ * by FlyBody3D) plus what the fly is doing and the time-scale control.
+ */
+export default function BodyView({ ref, status, playback, onPlayback, behaviour, byBrain, armed }) {
+  const b = BEHAVIOUR[behaviour] ?? BEHAVIOUR.explore;
+  return (
+    <section
+      className={`relative min-h-[56vh] flex-1 overflow-hidden rounded-xl border bg-void lg:min-h-0 ${armed ? 'border-rose-500' : 'border-white/[0.07]'}`}
+    >
+      <div ref={ref} data-testid="world-view" className={`absolute inset-0 ${armed ? 'cursor-crosshair' : 'cursor-grab active:cursor-grabbing'}`} />
+
+      <div className="pointer-events-none absolute left-3 top-3 flex flex-col items-start gap-2">
+        <span className="text-[11px] font-medium text-neutral-400">NeuroMechFly v2 · FlyGym body</span>
+        <div data-testid="behaviour" className="flex items-center gap-2 rounded-lg border border-white/10 bg-panel/90 px-3 py-1.5">
+          <span className={`size-2 rounded-full ${b.dot} ${behaviour === 'flee' ? 'animate-ping' : ''}`} />
+          <span className="text-sm font-semibold text-white">{b.text}</span>
+          <span className="hidden text-xs text-neutral-400 sm:inline">{b.note}</span>
+          {byBrain && <span className="ml-1 hidden rounded bg-white/[0.07] px-1.5 py-0.5 text-[10px] font-medium text-neutral-300 sm:inline">FlyWire brain</span>}
+        </div>
       </div>
 
-      <div className="absolute right-3 top-3 flex gap-1 rounded-lg border border-white/10 bg-black/50 p-0.5 backdrop-blur">
-        {[
-          [0.25, '¼× slow-mo'],
-          [1, '1× real time'],
-        ].map(([v, label]) => (
+      <div className="absolute right-3 top-3 flex gap-0.5 rounded-lg border border-white/10 bg-panel/90 p-0.5" role="group" aria-label="Time scale">
+        {SPEEDS.map(([v, label]) => (
           <button
             key={v}
             type="button"
             onClick={() => onPlayback(v)}
-            className={`rounded-md px-2 py-1 font-mono text-[10px] font-bold transition ${
-              playback === v ? 'bg-orange-400/25 text-orange-100' : 'text-slate-400 hover:text-slate-200'
+            aria-pressed={playback === v}
+            className={`rounded-md px-2.5 py-1 font-mono text-[11px] font-medium transition ${
+              playback === v ? 'bg-raised text-white' : 'text-neutral-400 hover:text-neutral-200'
             }`}
           >
             {label}
@@ -29,21 +50,15 @@ export default function BodyView({ ref, status, playback, onPlayback }) {
         ))}
       </div>
 
-      <div className="pointer-events-none absolute bottom-3 left-3 right-3 flex flex-wrap gap-x-3 gap-y-1 font-mono text-[10px] text-slate-400">
-        <span>
-          <span className="text-orange-300">legs</span> glow with VNC T1 / T2 / T3
-        </span>
-        <span>
-          <span className="text-cyan-300">eyes · antennae</span> with optic / antennal lobes
-        </span>
-        <span>
-          <span className="text-amber-100">flash</span> = leg in swing
-        </span>
+      <div className="pointer-events-none absolute bottom-3 left-3 right-3 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-neutral-500">
+        <span>{armed ? 'Click the floor to drop a spider' : 'Click the floor to drop sugar'}</span>
+        <span>Drag to orbit · scroll to zoom</span>
+        <span>Legs glow with VNC T1 / T2 / T3</span>
       </div>
 
       {status !== 'ready' && (
         <div className="pointer-events-none absolute inset-0 grid place-items-center">
-          <span className="rounded-lg border border-white/10 bg-black/60 px-3 py-1.5 font-mono text-[11px] text-slate-300">
+          <span className="rounded-lg border border-white/10 bg-panel px-3 py-1.5 text-xs text-neutral-300">
             {status === 'error' ? 'NeuroMechFly body failed to load' : 'Loading NeuroMechFly body…'}
           </span>
         </div>

@@ -41,29 +41,29 @@ export function ClaimDeploymentModal({ dna, score, onClose }) {
 
   return (
     <div className="fixed inset-0 z-50 grid place-items-center bg-black/70 p-4 backdrop-blur-sm" role="dialog" aria-modal="true" aria-label="Claim Fly's Deployment">
-      <div className="max-h-[92vh] w-full max-w-lg overflow-y-auto rounded-2xl border border-[#3b7bff]/60 bg-panel p-5 shadow-[0_0_60px_-10px_rgba(59,123,255,0.9)]">
+      <div className="max-h-[92vh] w-full max-w-lg overflow-y-auto rounded-2xl border border-[#3b7bff]/60 bg-panel p-5">
         <div className="flex items-start justify-between">
           <div>
-            <p className="text-[10px] font-black uppercase tracking-[0.35em] text-[#8fb2ff]">Claim Fly&apos;s Deployment</p>
-            <h2 className="mt-1 font-mono text-xl font-black text-white">{deployment.name}</h2>
+            <p className="text-[10px] font-semibold uppercase tracking-wider text-[#8fb2ff]">Claim Fly&apos;s Deployment</p>
+            <h2 className="mt-1 font-mono text-xl font-semibold text-white">{deployment.name}</h2>
           </div>
-          <button type="button" onClick={onClose} className="rounded-lg px-2 py-1 text-slate-400 hover:bg-white/10 hover:text-white" aria-label="Close">
+          <button type="button" onClick={onClose} className="rounded-lg px-2 py-1 text-neutral-400 hover:bg-white/10 hover:text-white" aria-label="Close">
             ✕
           </button>
         </div>
 
         <dl className="mt-3 grid grid-cols-3 gap-2 font-mono text-[11px]">
           <div className="rounded-lg bg-black/40 px-2 py-1.5">
-            <dt className="text-slate-500">symbol</dt>
+            <dt className="text-neutral-500">symbol</dt>
             <dd className="text-white">{deployment.symbol}</dd>
           </div>
           <div className="rounded-lg bg-black/40 px-2 py-1.5">
-            <dt className="text-slate-500">supply</dt>
+            <dt className="text-neutral-500">supply</dt>
             <dd className="text-white">{deployment.supplyDisplay}</dd>
           </div>
           <div className="rounded-lg bg-black/40 px-2 py-1.5">
-            <dt className="text-slate-500">on-chain dna</dt>
-            <dd className="text-fuchsia-200">{frozen.dna}</dd>
+            <dt className="text-neutral-500">on-chain dna</dt>
+            <dd className="text-neutral-200">{frozen.dna}</dd>
           </div>
         </dl>
 
@@ -74,7 +74,7 @@ export function ClaimDeploymentModal({ dna, score, onClose }) {
           {'\n}'}
         </pre>
 
-        <label className="mt-3 block text-[11px] font-semibold text-slate-300">
+        <label className="mt-3 block text-[11px] font-semibold text-neutral-300">
           Network
           <select
             value={networkKey}
@@ -89,7 +89,7 @@ export function ClaimDeploymentModal({ dna, score, onClose }) {
           </select>
         </label>
 
-        <label className="mt-3 flex items-start gap-2 text-[11px] leading-snug text-slate-400">
+        <label className="mt-3 flex items-start gap-2 text-[11px] leading-snug text-neutral-400">
           <input type="checkbox" checked={agreed} onChange={(e) => setAgreed(e.target.checked)} className="mt-0.5" />
           <span>
             I understand this deploys a novelty token from <b>my own wallet</b>, pays gas myself
@@ -104,7 +104,7 @@ export function ClaimDeploymentModal({ dna, score, onClose }) {
           disabled={!agreed || !!stage}
           onClick={deploy}
           data-testid="deploy-flycoin"
-          className="mt-4 w-full rounded-xl border border-[#3b7bff] bg-[#0052ff]/30 px-4 py-3 text-sm font-black uppercase tracking-[0.16em] text-white shadow-[0_0_24px_-4px_rgba(0,82,255,0.9)] transition hover:bg-[#0052ff]/45 disabled:cursor-not-allowed disabled:opacity-40"
+          className="mt-4 w-full rounded-xl border border-[#3b7bff] bg-[#0052ff]/30 px-4 py-3 text-sm font-semibold uppercase tracking-wider text-white transition hover:bg-[#0052ff]/45 disabled:cursor-not-allowed disabled:opacity-40"
         >
           {stage ? STAGES[stage] : `🚀 Deploy on ${network.params.chainName}`}
         </button>

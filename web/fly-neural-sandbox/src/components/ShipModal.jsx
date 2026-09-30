@@ -115,19 +115,19 @@ export default function ShipModal({ dna, weights, score, deployments, shareUrl, 
 
   return (
     <div className="fixed inset-0 z-50 grid place-items-center bg-black/70 p-4 backdrop-blur-sm" role="dialog" aria-modal="true" aria-label="Ship the fly's app">
-      <div data-testid="ship-modal" className="w-full max-w-lg rounded-3xl border border-fuchsia-300/60 bg-[#070a18] p-6 shadow-[0_0_70px_-10px_rgba(232,121,249,0.9)]">
+      <div data-testid="ship-modal" className="w-full max-w-lg rounded-3xl border border-white/10 bg-panel p-6">
         <div className="flex items-start justify-between gap-3">
           <div>
-            <p className="text-[10px] font-black uppercase tracking-[0.35em] text-fuchsia-300">App shipped 🚀</p>
-            <h2 className="mt-1 text-2xl font-black text-white">{title}</h2>
-            <p className="mt-1 text-sm text-slate-400">Your fly finished every builder task. Here&apos;s what it designed:</p>
+            <p className="text-[10px] font-semibold uppercase tracking-wider text-neutral-200">App shipped 🚀</p>
+            <h2 className="mt-1 text-2xl font-semibold text-white">{title}</h2>
+            <p className="mt-1 text-sm text-neutral-400">Your fly finished every builder task. Here&apos;s what it designed:</p>
           </div>
-          <button type="button" onClick={onClose} className="rounded-lg px-2 py-1 text-slate-400 hover:bg-white/10 hover:text-white" aria-label="Close">
+          <button type="button" onClick={onClose} className="rounded-lg px-2 py-1 text-neutral-400 hover:bg-white/10 hover:text-white" aria-label="Close">
             ✕
           </button>
         </div>
 
-        <pre className="mt-3 max-h-40 overflow-auto whitespace-pre-wrap rounded-xl border border-white/10 bg-black/60 p-3 font-mono text-[11px] leading-relaxed text-slate-300">
+        <pre className="mt-3 max-h-40 overflow-auto whitespace-pre-wrap rounded-xl border border-white/10 bg-black/60 p-3 font-mono text-[11px] leading-relaxed text-neutral-300">
           {prompt}
         </pre>
 
@@ -137,7 +137,7 @@ export default function ShipModal({ dna, weights, score, deployments, shareUrl, 
             target="_blank"
             rel="noreferrer"
             data-testid="app-live-url"
-            className="mt-4 block rounded-2xl border border-lime-300/70 bg-lime-400/15 px-4 py-3 text-center font-black text-lime-50 hover:bg-lime-400/25"
+            className="mt-4 block rounded-2xl border border-lime-300/70 bg-lime-400/15 px-4 py-3 text-center font-semibold text-lime-50 hover:bg-lime-400/25"
           >
             🌐 Open {app.name ?? 'the app'} ↗
             <span className="mt-0.5 block break-all font-mono text-[11px] font-normal text-lime-200">{app.url}</span>
@@ -148,7 +148,7 @@ export default function ShipModal({ dna, weights, score, deployments, shareUrl, 
             onClick={launch}
             disabled={busy}
             data-testid="launch-real"
-            className="mt-4 w-full rounded-2xl border border-fuchsia-200/70 bg-gradient-to-r from-fuchsia-500/40 to-cyan-500/40 px-4 py-3.5 font-black uppercase tracking-[0.14em] text-white shadow-[0_0_30px_-8px_rgba(232,121,249,0.9)] transition hover:brightness-125 disabled:opacity-60"
+            className="mt-4 w-full rounded-2xl border border-accent bg-accent px-4 py-3.5 font-semibold text-neutral-950 transition hover:brightness-110 disabled:opacity-60"
           >
             {busy ? (
               <span className="inline-flex items-center gap-2">
@@ -163,7 +163,7 @@ export default function ShipModal({ dna, weights, score, deployments, shareUrl, 
         {error && <p className="mt-3 rounded-xl border border-amber-300/40 bg-amber-400/10 px-3 py-2 text-xs text-amber-100">{error}</p>}
 
         {fallback && (
-          <div className="mt-3 rounded-xl border border-white/10 bg-white/[0.03] p-3 text-xs text-slate-300">
+          <div className="mt-3 rounded-xl border border-white/10 bg-white/[0.03] p-3 text-xs text-neutral-300">
             <p>
               {realApps === false
                 ? 'Build it on Base44 in one click (real one-tap launches switch on once the server has a Base44 token):'
@@ -173,13 +173,13 @@ export default function ShipModal({ dna, weights, score, deployments, shareUrl, 
               type="button"
               onClick={handoff}
               data-testid="handoff-base44"
-              className="mt-2 w-full rounded-xl border border-cyan-300/60 bg-cyan-400/10 px-3 py-2 font-black uppercase tracking-wider text-cyan-50 hover:bg-cyan-400/20"
+              className="mt-2 w-full rounded-xl border border-white/10 bg-white/5 px-3 py-2 font-semibold uppercase tracking-wider text-neutral-200 hover:bg-white/5"
             >
               🛠 Open in the Base44 builder (prompt copied)
             </button>
           </div>
         )}
-        <p className="mt-3 text-center text-[10px] text-slate-600">Real launches are rate-limited and built from the fly&apos;s DNA only.</p>
+        <p className="mt-3 text-center text-[10px] text-neutral-600">Real launches are rate-limited and built from the fly&apos;s DNA only.</p>
       </div>
     </div>
   );
