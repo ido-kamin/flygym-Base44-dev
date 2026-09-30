@@ -53,7 +53,7 @@ describe('FlyWire brain on the server', () => {
     ws.send(JSON.stringify({ type: 'control', name: 'walk', hz: 50 }));
     const walking = await until(() => inbox.json.filter((m) => m.type === 'frame').find((m) => m.groups.walk > 20));
     expect(walking.controls.walk).toBe(50);
-    expect(await until(() => inbox.binary.find((b) => b[0] === 2))).toBeTruthy(); // sparse activity
+    expect(await until(() => inbox.binary.find((b) => b[0] === 3))).toBeTruthy(); // per-neuron activity, 4 bits
 
     // the only slot is taken: a second visitor is told the server is busy
     const second = await open();

@@ -108,7 +108,9 @@ export class LIFBrain {
     const n = this.n;
     this.v = new Float32Array(n).fill(P.v0);
     this.g = new Float32Array(n);
-    this.refr = new Float32Array(n);
+    // refractory countdown in whole steps (t_ref 2.2 ms at dt 1 ms: the 3 steps a float countdown from 2.2 takes)
+    this.refr = new Uint8Array(n);
+    this.refrSteps = Math.max(1, Math.ceil(P.tRef / dt - 1e-9));
     this.delaySteps = Math.max(1, Math.round(P.delay / dt));
     const D = this.delaySteps + 1;
     this.ring = Array.from({ length: D }, () => new Float32Array(n));
@@ -140,6 +142,14 @@ export class LIFBrain {
     this.totalSpikes = 0;
     this.spikeCount = new Uint32Array(n); // spikes per neuron since the start
     this.eligibleFrom = 0;
+    /** spontaneous activity: Hz per neuron, and the depolarization of each spontaneous event (mV) */
+    this.background = 0;
+    this.bgWeight = P.poissonWeight;
+    this.bgAcc = 0;
+    /** a neuron leaves the active set once |v - v0| and |g| fall below these (mV) */
+    this.restV = 1e-3;
+    this.restG = 1e-4;
+    this.dense = false;
     this.poissonTargets = new Uint8Array(n); // Poisson targets have no refractory period
     /** lesions: silenced neurons never fire (like a genetic silencing experiment) */
     this.silenced = new Uint8Array(n);
@@ -188,6 +198,59 @@ export class LIFBrain {
     }
   }
 
+  /** A spike of neuron i: reset, rate trace, raster, dopamine, and synaptic output after the delay. */
+  fire(i) {
+    const P = this.P;
+    if (this.tracked[i] >= 0) this.spikeLog.push(this.tracked[i], this.t);
+    if (this.daOut && this.daOut[i]) this.releaseDopamine(i);
+    this.spikeCount[i]++;
+    this.v[i] = P.vReset;
+    this.g[i] = 0;
+    this.refr[i] = this.poissonTargets[i] ? 0 : this.refrSteps;
+    // lazy rate decay, then the spike kick
+    const step = this.step_;
+    const age = step - this.rateStep[i];
+    this.rate[i] = (age < 2048 ? this.rate[i] * this.decayTable[age] : 0) + this.rateKick;
+    this.rateStep[i] = step;
+    const { offsets, post } = this.conn;
+    const wmv = this.wmv;
+    const future = this.future;
+    const list = this.futureList;
+    const stamp = this.futureStamp;
+    const touch = this.touchStamp;
+    let fc = this.fc;
+    for (let e = offsets[i], end = offsets[i + 1]; e < end; e++) {
+      const j = post[e];
+      future[j] += wmv[e];
+      if (touch[j] !== stamp) {
+        touch[j] = stamp;
+        list[fc++] = j;
+      }
+    }
+    this.fc = fc;
+  }
+
+  enterDense() {
+    this.dense = true;
+    this.isActive.fill(1); // wake() is a no-op while dense
+  }
+
+  leaveDense() {
+    this.dense = false;
+    const { v, g, refr, P } = this;
+    let c = 0;
+    for (let i = 0; i < this.n; i++) {
+      const dv = v[i] - P.v0;
+      if (refr[i] !== 0 || dv > this.restV || dv < -this.restV || g[i] > this.restG || g[i] < -this.restG || this.poissonTargets[i]) {
+        this.isActive[i] = 1;
+        this.active[c++] = i;
+      } else {
+        this.isActive[i] = 0;
+      }
+    }
+    this.activeCount = c;
+  }
+
   /**
    * Return every neuron to rest (v = v0, g = 0, nothing in flight), keeping the
    * Poisson drives. The published model is run as separate trials from rest;
@@ -202,6 +265,7 @@ export class LIFBrain {
     this.touchStamp.fill(-1);
     this.isActive.fill(0);
     this.activeCount = 0;
+    this.dense = false;
     this.eligibleFrom = this.step_; // a new trial: earlier Kenyon-cell spikes are no longer eligible for learning
     if (this.plastic) this.plastic.da.fill(0);
     for (const i of this.drive.keys()) this.wake(i);
@@ -216,9 +280,7 @@ export class LIFBrain {
 
   /** Advance one dt; returns the number of spikes. */
   step() {
-    const { v, g, refr, P, kM, decayG, rate, rateStep, decayTable } = this;
-    const { offsets, post } = this.conn;
-    const wmv = this.wmv;
+    const { v, g, refr, P, kM, decayG } = this;
     const D = this.delaySteps + 1;
     const slotNow = this.step_ % D;
     const slotFuture = (this.step_ + this.delaySteps) % D;
@@ -238,65 +300,101 @@ export class LIFBrain {
     }
     this.touchedCount[slotNow] = 0;
 
-    // 2. Poisson (sensory) input spikes
+    // 2a. spontaneous activity: every neuron fires on its own at `background` Hz
+    // (a Poisson spike source per neuron, sampled as the expected number of hits per step)
+    if (this.background > 0) {
+      this.bgAcc += (this.n * this.background * dt) / 1000;
+      const n = this.n;
+      while (this.bgAcc >= 1) {
+        this.bgAcc -= 1;
+        const i = (this.rng() * n) | 0;
+        if (this.silenced[i]) continue;
+        v[i] += this.bgWeight;
+        this.wake(i);
+      }
+    }
+    // 2b. Poisson (sensory) input spikes
     for (const [i, hz] of this.drive) {
       if (this.rng() < (hz * dt) / 1000 && !this.silenced[i]) v[i] += P.poissonWeight;
       this.wake(i);
     }
 
-    // 3. integrate the active set
+    // 3. integrate: the active set, or every neuron when most of the brain is busy
+    // (spontaneous activity keeps ~half the brain active; a straight loop is then faster)
+    this.fc = this.touchedCount[slotFuture];
+    this.futureList = futureList;
+    this.future = future;
+    this.futureStamp = futureStamp;
     let spikes = 0;
-    let nextCount = 0;
-    const next = this.nextActive;
     const vTh = P.vTh;
     const v0 = P.v0;
-    let fc = this.touchedCount[slotFuture];
-    const step = this.step_;
-    for (let k = 0, c = this.activeCount; k < c; k++) {
-      const i = this.active[k];
-      if (refr[i] > 0) {
-        refr[i] -= dt;
-        next[nextCount++] = i;
-        continue;
-      }
-      v[i] += kM * (v0 - v[i] + g[i]);
-      g[i] *= decayG;
-      if (v[i] > vTh && this.silenced[i]) v[i] = v0; // lesioned: never fires
-      if (v[i] > vTh) {
-        spikes++;
-        if (this.tracked[i] >= 0) this.spikeLog.push(this.tracked[i], this.t);
-        if (this.daOut && this.daOut[i]) this.releaseDopamine(i);
-        this.spikeCount[i]++;
-        v[i] = P.vReset;
-        g[i] = 0;
-        refr[i] = this.poissonTargets[i] ? 0 : P.tRef;
-        // lazy rate decay, then the spike kick
-        const age = step - rateStep[i];
-        rate[i] = (age < 2048 ? rate[i] * decayTable[age] : 0) + this.rateKick;
-        rateStep[i] = step;
-        for (let e = offsets[i], end = offsets[i + 1]; e < end; e++) {
-          const j = post[e];
-          future[j] += wmv[e];
-          if (this.touchStamp[j] !== futureStamp) {
-            this.touchStamp[j] = futureStamp;
-            futureList[fc++] = j;
+    const restV = this.restV;
+    const restG = this.restG;
+    const silenced = this.silenced;
+    const poissonTargets = this.poissonTargets;
+    const n = this.n;
+    if (this.dense) {
+      for (let i = 0; i < n; i++) {
+        if (refr[i] !== 0) {
+          refr[i]--;
+          continue;
+        }
+        const gi = g[i];
+        const vi = v[i] + kM * (v0 - v[i] + gi);
+        g[i] = gi * decayG;
+        if (vi > vTh) {
+          if (silenced[i]) {
+            v[i] = v0; // lesioned: never fires
+          } else {
+            spikes++;
+            this.fire(i);
           }
+        } else {
+          v[i] = vi;
         }
       }
-      const dv = v[i] - v0;
-      if (refr[i] > 0 || dv > 1e-3 || dv < -1e-3 || g[i] > 1e-4 || g[i] < -1e-4 || this.poissonTargets[i]) {
-        next[nextCount++] = i;
-      } else {
-        v[i] = v0;
-        g[i] = 0;
-        this.isActive[i] = 0;
+      // every 50 steps: is most of the brain still busy?
+      if (this.step_ % 50 === 0) {
+        let awake = 0;
+        for (let i = 0; i < n; i++) {
+          const dv = v[i] - v0;
+          if (refr[i] !== 0 || dv > restV || dv < -restV || g[i] > restG || g[i] < -restG) awake++;
+        }
+        if (awake < n * 0.2) this.leaveDense();
       }
+    } else {
+      let nextCount = 0;
+      const next = this.nextActive;
+      for (let k = 0, c = this.activeCount; k < c; k++) {
+        const i = this.active[k];
+        if (refr[i] !== 0) {
+          refr[i]--;
+          next[nextCount++] = i;
+          continue;
+        }
+        v[i] += kM * (v0 - v[i] + g[i]);
+        g[i] *= decayG;
+        if (v[i] > vTh && silenced[i]) v[i] = v0; // lesioned: never fires
+        if (v[i] > vTh) {
+          spikes++;
+          this.fire(i);
+        }
+        const dv = v[i] - v0;
+        if (refr[i] !== 0 || dv > restV || dv < -restV || g[i] > restG || g[i] < -restG || poissonTargets[i]) {
+          next[nextCount++] = i;
+        } else {
+          v[i] = v0;
+          g[i] = 0;
+          this.isActive[i] = 0;
+        }
+      }
+      // swap active lists
+      this.nextActive = this.active;
+      this.active = next;
+      this.activeCount = nextCount;
+      if (nextCount > n * 0.35) this.enterDense();
     }
-    this.touchedCount[slotFuture] = fc;
-    // swap active lists
-    this.nextActive = this.active;
-    this.active = next;
-    this.activeCount = nextCount;
+    this.touchedCount[slotFuture] = this.fc;
 
     this.t += dt;
     this.step_++;
@@ -314,7 +412,7 @@ export class LIFBrain {
    * therefore weakens that odour's KC->MBON synapses, a memory of it.
    * @param {{kc:number[], mbon:number[], dan:number[]}} cells
    */
-  enablePlasticity({ kc, mbon, dan }, { rate = 0.06, window = 1000, floor = 0.15 } = {}) {
+  enablePlasticity({ kc, mbon, dan }, { rate = 0.1, window = 1000, floor = 0.15 } = {}) {
     const { offsets, post } = this.conn;
     const isKC = new Uint8Array(this.n);
     for (const i of kc) isKC[i] = 1;

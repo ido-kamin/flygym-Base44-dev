@@ -8,7 +8,7 @@
 // GET /api/brain/selftest   run the published circuits on fresh brains here and report what happened
 //
 // Server -> page messages: JSON text {type:'ready'|'frame'|'experiment'|'busy'|'error'}; binary
-// messages start with a tag byte: 1 = neuron regions + positions (once), 2 = sparse activity.
+// messages start with a tag byte: 1 = neuron regions + positions (once), 3 = activity (4 bits per neuron).
 
 import { readFileSync } from 'node:fs';
 import os from 'node:os';
@@ -128,17 +128,15 @@ export function createBrainHost({ connectomePath, maxSessions = Math.max(1, os.c
     ws.send(data.init);
     w.on('message', (msg) => {
       if (ws.readyState !== ws.OPEN) return;
-      if (msg.type === 'frame' && msg.sparse) {
-        const { idx, val } = msg.sparse;
-        delete msg.sparse;
+      if (msg.type === 'frame' && msg.packed) {
+        const packed = msg.packed;
+        delete msg.packed;
         if (ws.bufferedAmount < MAX_BUFFERED) {
-          const k = idx.length;
-          const buf = new Uint8Array(8 + k * 4 + k);
-          buf[0] = 2;
-          new DataView(buf.buffer).setUint32(4, k, true);
-          buf.set(new Uint8Array(idx.buffer, idx.byteOffset, k * 4), 8);
-          buf.set(val, 8 + k * 4);
-          ws.send(buf);
+          const buf = new Uint8Array(8 + packed.length);
+          buf[0] = 3;
+          new DataView(buf.buffer).setUint32(4, packed.length * 2, true);
+          buf.set(packed, 8);
+          ws.send(buf); // mostly zeros: permessage-deflate shrinks it a lot
         }
       }
       if (msg.type === 'frame') msg.where = { sessions: sessions.size, load: os.loadavg()[0] };
@@ -166,7 +164,11 @@ export function createBrainHost({ connectomePath, maxSessions = Math.max(1, os.c
     ws.on('error', end);
   }
 
-  const wss = new WebSocketServer({ noServer: true, maxPayload: 8192, perMessageDeflate: false });
+  const wss = new WebSocketServer({
+    noServer: true,
+    maxPayload: 8192,
+    perMessageDeflate: { threshold: 2048, zlibDeflateOptions: { level: 1 }, serverNoContextTakeover: true, clientNoContextTakeover: true },
+  });
   wss.on('connection', connect);
   const idle = setInterval(() => {
     for (const s of sessions) if (now() - s.lastSeen > IDLE_MS) s.ws.close(1000, 'idle');

@@ -2,10 +2,10 @@ const BEHAVIOUR = {
   explore: { text: 'Exploring', note: 'walking on its own', dot: 'bg-neutral-300' },
   walk: { text: 'Walking', note: 'DNp09 is firing', dot: 'bg-neutral-300' },
   forage: { text: 'Foraging', note: 'hungry — following the scent', dot: 'bg-accent' },
-  flee: { text: 'Escaping', note: 'giant fiber fired — jump!', dot: 'bg-rose-500' },
-  feed: { text: 'Feeding', note: 'proboscis on the sugar', dot: 'bg-accent' },
+  flee: { text: 'Flying away', note: 'giant fiber fired: take-off', dot: 'bg-rose-500' },
+  feed: { text: 'Feeding', note: 'motor neurons firing, proboscis on the sugar', dot: 'bg-accent' },
   groom: { text: 'Grooming', note: 'cleaning its antennae', dot: 'bg-sky-400' },
-  stand: { text: 'Standing', note: 'its walk neurons are quiet', dot: 'bg-neutral-500' },
+  stand: { text: 'Resting', note: 'its walk neurons are quiet', dot: 'bg-neutral-500' },
 };
 
 const SPEEDS = [

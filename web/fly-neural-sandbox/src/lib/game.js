@@ -80,8 +80,11 @@ const ANTENNA_SPREAD = 0.65; // rad either side of the heading
 const FEED_TIME = 0.5; // s the fly stops on each sugar
 const FEED_MAX = 1.5; // s, while the real brain's feeding motor neurons keep firing
 const GROOM_TIME = 1.6; // s
-const ESCAPE_TIME = 0.45; // s of giant-fiber burst
-const ESCAPE_SPEED = 1.5; // x MAX_SPEED
+/** The giant-fiber escape: take-off and a short flight away (s). */
+export const ESCAPE_TIME = 1.1;
+const ESCAPE_SPEED = 1.7; // x MAX_SPEED, in the air
+/** Neurons mode: seconds of feeding (brain motor neurons firing, proboscis on it) to finish one sugar drop. */
+const MEAL_TIME = 1.2;
 /** What the fly is doing, for the HUD. */
 export const BEHAVIOURS = ['explore', 'forage', 'flee', 'feed', 'groom', 'stand'];
 export const MOTOR_MODES = ['assist', 'neurons'];
@@ -99,7 +102,7 @@ export class Game {
     this.network = new Connectome();
     this.input = new Float32Array(CLUSTER_COUNT);
     this.events = [];
-    this.sensors = { odorL: 0, odorR: 0, loomL: 0, loomR: 0, threatL: 0, threatR: 0 };
+    this.sensors = { odorL: 0, odorR: 0, loomL: 0, loomR: 0, threatL: 0, threatR: 0, wallL: 0, wallR: 0, taste: 0 };
     /**
      * Optional motor command from the real brain, set by the caller each frame:
      * {turn -1..1, escape, escapeSide, feed, groom}. null = connectome model only.
@@ -312,6 +315,11 @@ export class Game {
       // FlyWire descending neurons only: no brain connected = the fly stands still
       turnCmd = bm ? bm.turn : 0;
       vTarget = bm ? MAX_SPEED * bm.walk : 0;
+      // proboscis on sugar and the feeding motor neurons firing: feeding arrests walking
+      if (bm?.feed && s.taste > 0) {
+        turnCmd = 0;
+        vTarget = 0;
+      }
     } else {
       turnCmd = turn + chaos * 1.1 * this.noise + (bm ? bm.turn * 0.6 : 0);
       const locomotor = 0.3 + 0.7 * norm(w[G.speed]);
@@ -319,7 +327,9 @@ export class Game {
     }
     let vRate = 4;
     if (fly.escapeTimer > 0) {
-      turnCmd = fly.escapeTurn;
+      // in the air: the take-off direction fades into the brain's own steering
+      const u = fly.escapeTimer / ESCAPE_TIME;
+      turnCmd = fly.escapeTurn * u + (bm ? bm.turn * 0.6 : 0) * (1 - u);
       vTarget = MAX_SPEED * ESCAPE_SPEED;
       vRate = 14;
     } else if (fly.feedTimer > 0 || fly.groomTimer > 0) {
@@ -346,7 +356,8 @@ export class Game {
 
     // metabolism: a baseline cost plus a speed^2 cost that scales with the drive gene
     const vn = fly.v / MAX_SPEED;
-    this.energy -= h * ((neurons ? 0.4 : 0.9) + 2.2 * vn * vn * (0.5 + norm(w[G.speed])));
+    // neurons mode: a gentler metabolism (a live fly lasts minutes, not seconds, between meals)
+    this.energy -= h * (neurons ? 0.3 + 0.5 * vn * vn : 0.9 + 2.2 * vn * vn * (0.5 + norm(w[G.speed])));
     if (this.energy <= 0) {
       this.energy = 0;
       this.over = true;
@@ -409,7 +420,7 @@ export class Game {
     this.behaviour =
       fly.escapeTimer > 0
         ? 'flee'
-        : fly.feedTimer > 0
+        : fly.feedTimer > 0 || (neurons && bm?.feed && s.taste > 0)
           ? 'feed'
           : fly.groomTimer > 0
             ? 'groom'
@@ -471,7 +482,9 @@ export class Game {
     // looming from animals only (walls don't trigger escapes)
     this.sensors.threatL = Math.min(3, loomL);
     this.sensors.threatR = Math.min(3, loomR);
-    // walls read as looming surfaces to the eyes
+    // walls read as looming surfaces to the eyes (a separate, gentler channel)
+    const tL = loomL;
+    const tR = loomR;
     const wallProbe = 90;
     if (fly.x < wallProbe) addThreat(-fly.x, 0, 22, 1);
     if (ARENA.w - fly.x < wallProbe) addThreat(ARENA.w - fly.x, 0, 22, 1);
@@ -479,10 +492,15 @@ export class Game {
     if (ARENA.h - fly.y < wallProbe) addThreat(0, ARENA.h - fly.y, 22, 1);
     this.sensors.loomL = Math.min(3, loomL);
     this.sensors.loomR = Math.min(3, loomR);
+    this.sensors.wallL = Math.min(3, loomL - tL);
+    this.sensors.wallR = Math.min(3, loomR - tR);
   }
 
   collideWalls() {
     const fly = this.fly;
+    // neurons mode: a wall just stops the fly (it slides along it); turning away is up to its brain
+    const reflect = this.motorMode !== 'neurons';
+    const th = fly.theta;
     let hit = false;
     if (fly.x < WALL_MARGIN) {
       fly.x = WALL_MARGIN;
@@ -502,6 +520,7 @@ export class Game {
       fly.theta = wrapAngle(-fly.theta);
       hit = true;
     }
+    if (hit && !reflect) fly.theta = th;
     if (hit) {
       // antennal mechanosensation on contact
       this.network.kick(C.AL_L, 0.25);
@@ -521,12 +540,34 @@ export class Game {
     const fly = this.fly;
     const headX = fly.x + Math.cos(fly.theta) * FLY_RADIUS * 0.8;
     const headY = fly.y + Math.sin(fly.theta) * FLY_RADIUS * 0.8;
+    const neurons = this.motorMode === 'neurons';
+    const bm = this.brainMotor;
+    this.sensors.taste = 0;
     for (let i = this.sugars.length - 1; i >= 0; i--) {
       const s = this.sugars[i];
       s.age += h;
-      if (Math.hypot(s.x - headX, s.y - headY) < SUGAR_RADIUS + FLY_RADIUS * 0.6) {
-        this.sugars.splice(i, 1);
-        this.eat(s);
+      const dHead = Math.hypot(s.x - headX, s.y - headY);
+      // neurons mode tastes with the legs too (tarsal sugar receptors), so the whole body counts
+      const reach = neurons && !s.kind ? SUGAR_RADIUS + FLY_RADIUS * 1.6 : SUGAR_RADIUS + FLY_RADIUS * 0.6;
+      if (dHead < reach && fly.escapeTimer === 0) {
+        if (!neurons || s.kind) {
+          // assist mode (and mission tokens): collected on touch
+          this.sugars.splice(i, 1);
+          this.eat(s);
+          continue;
+        }
+        // neurons mode: the proboscis tastes it; the fly eats only while its feeding motor neurons fire
+        this.sensors.taste = 1;
+        s.left ??= MEAL_TIME;
+        if (bm?.feed) {
+          s.left -= h;
+          const gain = 10 * (0.5 + norm(this.weights[G.reward]));
+          this.energy = Math.min(MAX_ENERGY, this.energy + (gain / MEAL_TIME) * h);
+          if (s.left <= 0) {
+            this.sugars.splice(i, 1);
+            this.eat(s, { fed: true });
+          }
+        }
       }
     }
     const target = this.foodTarget();
@@ -538,12 +579,12 @@ export class Game {
     }
   }
 
-  eat(sugar) {
+  eat(sugar, { fed = false } = {}) {
     const reward = norm(this.weights[G.reward]);
-    const gain = 10 * (0.5 + reward);
+    const gain = fed ? 0 : 10 * (0.5 + reward); // (neurons mode: already gained while feeding)
     // proboscis extension: the fly stops to feed
-    // (neurons mode: only a brief touch; the brain's motor neurons decide how long it feeds)
-    this.fly.feedTimer = this.motorMode === 'neurons' ? 0.25 : FEED_TIME;
+    // (neurons mode: it has just fed for as long as its motor neurons fired)
+    this.fly.feedTimer = this.motorMode === 'neurons' ? 0 : FEED_TIME;
     this.fly.feedTime = 0;
     this.fly.groomTimer = 0;
     this.energy = Math.min(MAX_ENERGY, this.energy + gain);
@@ -657,7 +698,7 @@ export class Game {
       }
       p.gait += h * p.v * 0.12;
 
-      if (d < PREDATOR_RADIUS + FLY_RADIUS && fly.hitCooldown === 0) {
+      if (d < PREDATOR_RADIUS + FLY_RADIUS && fly.hitCooldown === 0 && fly.escapeTimer === 0) {
         fly.hitCooldown = 1.0;
         this.energy = Math.max(0, this.energy - HIT_DAMAGE);
         // which eye saw the strike, measured before the knock-back turns the fly

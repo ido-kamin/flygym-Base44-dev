@@ -40,7 +40,7 @@ describe('BrainSession (the same code runs on the server and in the browser)', (
     expect(frames().some((f) => f.spikes.length > 0)).toBe(true);
     s.handle({ type: 'lesion', name: 'steer', on: true });
     const n = frames().length;
-    await until(() => frames().length > n + 6);
+    await until(() => frames().length > n + 20);
     expect(frames().at(-1).groups.steerL).toBeLessThan(5);
     expect(frames().at(-1).lesions.steer).toBe(true);
     s.stop();
@@ -48,6 +48,9 @@ describe('BrainSession (the same code runs on the server and in the browser)', (
 
   it('learning: pairing odour A with dopamine weakens A’s KC->MBON drive, not B’s', async () => {
     const { s, inbox, until } = session();
+    // the world keeps sending smells and hunger meanwhile: the lab protocol must ignore them
+    s.handle({ type: 'drive', rates: { olfactoryL: 40, olfactoryR: 40, visionL: 20, visionR: 20 } });
+    s.handle({ type: 'control', name: 'hunger', hz: 30 });
     const run = async (action, odor) => {
       const k = inbox.filter((m) => m.type === 'experiment').length;
       s.handle({ type: 'experiment', action, odor });

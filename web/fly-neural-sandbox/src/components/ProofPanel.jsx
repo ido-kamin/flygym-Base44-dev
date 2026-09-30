@@ -145,6 +145,10 @@ export default function ProofPanel({ real, getRaster, motor, onSelfTest }) {
             </span>
           </div>
           <div className="mt-1 text-neutral-500">
+            drive onto DNp09: hunger {motor?.hungerHz ?? 0} Hz{motor?.exploreHz ? ` + yours ${motor.exploreHz} Hz` : ''} · every neuron fires spontaneously at{' '}
+            {real.stats?.background ?? 0} Hz{motor?.taste ? ' · proboscis on sugar' : ''}
+          </div>
+          <div className="mt-1 text-neutral-500">
             inputs: photoreceptors {hz(g.vision)} · LPLC2/LC4 {hz(g.looming)} · sugar GRNs {hz(g.sugar)} · Kenyon cells {g.kc?.toFixed(2)} Hz
           </div>
         </div>

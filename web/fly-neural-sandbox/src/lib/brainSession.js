@@ -7,10 +7,15 @@
 // (connectomeWorker.js). The host passes `post(msg)` and receives plain
 // messages, so both transports carry exactly the same data.
 //
+// The brain is always live: every neuron fires spontaneously at `background`
+// Hz (Poisson), so the whole connectome is active and the descending neurons
+// fluctuate on their own, which is what makes the fly move autonomously.
+//
 // in (handle):
-//   {type:'drive', rates:{group: Hz}}      continuous senses (vision, looming, touch)
+//   {type:'drive', rates:{group: Hz}}      continuous senses (vision, looming, smell, taste, touch)
 //   {type:'trial', name}                   a stimulus trial from TRIALS (taste, smell)
-//   {type:'control', name, hz}             neural controls: walk (DNp09), steerL / steerR (DNa02), reward (PAM dopamine)
+//   {type:'control', name, hz}             neural controls: walk (DNp09), steerL / steerR (DNa02), reward (PAM dopamine);
+//                                          hunger: the fly's internal state, also onto DNp09 (hungry flies walk more)
 //   {type:'lesion', name, on}              silence a neuron group (escape, steer, walk, feed, sugar, dopamine)
 //   {type:'experiment', action, odor}      learning: 'test' or 'train' an odour ('A' | 'B')
 //   {type:'speed', scale} / {type:'pause', paused}
@@ -30,11 +35,14 @@ export const ODOR_INFO = {
 };
 /** What each neural control stimulates (Poisson drive, like optogenetic activation). */
 export const CONTROLS = {
-  walk: { label: 'Walk command DNp09', ref: 'Bidaye et al. 2020' },
-  steerL: { label: 'Steering DNa02 left', ref: 'Rayshubskiy et al. 2020' },
-  steerR: { label: 'Steering DNa02 right', ref: 'Rayshubskiy et al. 2020' },
-  reward: { label: 'Dopamine PAM (reward)', ref: 'Liu et al. 2012' },
+  walk: { label: 'Walk command DNp09', ref: 'Bidaye et al. 2020', group: 'walk' },
+  hunger: { label: 'Hunger (internal state) → DNp09', ref: 'hungry flies walk more', group: 'walk' },
+  steerL: { label: 'Steering DNa02 left', ref: 'Rayshubskiy et al. 2020', group: 'steerL' },
+  steerR: { label: 'Steering DNa02 right', ref: 'Rayshubskiy et al. 2020', group: 'steerR' },
+  reward: { label: 'Dopamine PAM (reward)', ref: 'Liu et al. 2012', group: 'reward' },
 };
+/** Spontaneous firing of every neuron (Hz): background synaptic noise keeping the whole brain live. */
+export const BACKGROUND_HZ = 0.5;
 export const LESIONS = {
   escape: 'Giant fibers DNp01',
   steer: 'Steering DNa02 + DNa01',
@@ -51,13 +59,15 @@ export class BrainSession {
    * @param {ReturnType<import('./lifBrain.js').parseConnectome>} conn
    * @param {{post:(msg:object)=>void, seed?:number, wmv?:Float32Array, now?:()=>number}} opts
    */
-  constructor(conn, { post, seed = (Math.random() * 2 ** 31) | 0, wmv = null, now = () => performance.now() }) {
+  constructor(conn, { post, seed = (Math.random() * 2 ** 31) | 0, wmv = null, now = () => performance.now(), background = BACKGROUND_HZ }) {
     this.conn = conn;
     this.post = post;
     this.now = now;
     const G = conn.header.groups;
     this.G = G;
     this.brain = new LIFBrain(conn, { seed, wmv });
+    this.background = background;
+    this.brain.background = background;
     this.plasticity = G.kc
       ? this.brain.enablePlasticity({ kc: G.kc.all, mbon: G.mbon.all, dan: G.dopamine.all })
       : null;
@@ -66,8 +76,9 @@ export class BrainSession {
     this.driveGroups = {
       visionL: subset(G.photoreceptor?.L ?? [], 2),
       visionR: subset(G.photoreceptor?.R ?? [], 2),
-      olfactoryL: subset(G.olfactory.L, 6),
-      olfactoryR: subset(G.olfactory.R, 6),
+      // every olfactory receptor neuron of each antenna (the odour-guided steering needs the whole population)
+      olfactoryL: G.olfactory.L,
+      olfactoryR: G.olfactory.R,
       loomingL: G.looming.L,
       loomingR: G.looming.R,
       sugar: side(G.sugar),
@@ -138,6 +149,10 @@ export class BrainSession {
       case 'experiment':
         this.startExperiment(msg.action, msg.odor);
         break;
+      case 'background':
+        this.background = Math.max(0, Math.min(5, Number(msg.hz) || 0));
+        if (!this.protocol?.quiet) this.brain.background = this.background;
+        break;
       case 'speed':
         this.speed = Math.max(0.05, Math.min(4, Number(msg.scale) || 1));
         this.wallAtFrame = this.now();
@@ -161,8 +176,16 @@ export class BrainSession {
   /** Continuous drive = senses + controls + the running protocol's stimulus, per group. */
   applyDrive() {
     const want = {};
-    for (const [k, hz] of Object.entries(this.rates)) if (this.driveGroups[k]) want[k] = Math.round(hz);
-    for (const [k, hz] of Object.entries(this.controlRates)) want[k] = Math.max(want[k] ?? 0, Math.round(hz));
+    // a lab experiment (quiet protocol) isolates the brain: only its own stimulus, no senses or controls
+    const isolated = Boolean(this.protocol?.quiet);
+    if (!isolated) {
+      for (const [k, hz] of Object.entries(this.rates)) if (this.driveGroups[k]) want[k] = Math.round(hz);
+      // controls onto the same group add up (hunger + explore on DNp09)
+      for (const [k, hz] of Object.entries(this.controlRates)) {
+        const g = CONTROLS[k].group;
+        want[g] = (want[g] ?? 0) + Math.round(hz);
+      }
+    }
     const p = this.protocol?.phase;
     if (p?.drive) for (const [k, hz] of Object.entries(p.drive)) want[k] = Math.max(want[k] ?? 0, hz);
     this.lastApplied ??= {};
@@ -179,7 +202,7 @@ export class BrainSession {
   startTrial(name) {
     const t = TRIALS[name];
     if (!t || this.protocol) return; // one at a time
-    this.runProtocol(name, [{ drive: { [t.group]: t.hz }, ms: t.ms }], null);
+    this.runProtocol(name, [{ drive: { [t.group]: t.hz }, ms: t.ms }], {}, null);
   }
 
   /**
@@ -199,7 +222,7 @@ export class BrainSession {
         : [{ drive: { [key]: 50 }, ms: 400 }];
     const before = Uint32Array.from(this.brain.spikeCount);
     const changesBefore = this.brain.plastic.changes;
-    this.runProtocol(`${action}${odor}`, phases, () => {
+    this.runProtocol(`${action}${odor}`, phases, { quiet: true }, () => {
       const d = new Uint32Array(this.conn.n);
       for (let i = 0; i < d.length; i++) d[i] = this.brain.spikeCount[i] - before[i];
       const drive = this.brain.kcDrive(d);
@@ -220,10 +243,15 @@ export class BrainSession {
     });
   }
 
-  /** Run phases back to back (sim time), then return the network to rest, as the model's trials are run. */
-  runProtocol(name, phases, done) {
+  /**
+   * Run phases back to back (sim time), then return the network to rest, as
+   * the model's trials are run. `quiet`: spontaneous activity is paused during
+   * the protocol (the learning measurements are made in a quiet brain).
+   */
+  runProtocol(name, phases, { quiet = false }, done) {
     this.brain.rest(); // each trial starts from rest
-    this.protocol = { name, phases, i: 0, phase: phases[0], until: this.brain.t + phases[0].ms, done };
+    if (quiet) this.brain.background = 0;
+    this.protocol = { name, phases, i: 0, phase: phases[0], until: this.brain.t + phases[0].ms, done, quiet };
     this.applyDrive();
   }
 
@@ -242,6 +270,7 @@ export class BrainSession {
     this.applyDrive();
     p.done?.();
     this.brain.rest();
+    this.brain.background = this.background;
   }
 
   // ---- the clock ----
@@ -305,6 +334,8 @@ export class BrainSession {
         trial: this.protocol?.name ?? null,
         cpuShare: this.totalWallMs / Math.max(1, now - this.startedAt),
         learnedSynapses: b.plastic?.changes ?? 0,
+        background: b.background,
+        dense: b.dense,
         synapseStrength: b.plastic ? b.plasticStrength() : 1,
       },
       controls: { ...this.controlRates },

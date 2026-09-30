@@ -9,8 +9,13 @@
 //   eyes: light + image motion -> R1-6 / R7 / R8 photoreceptors    (continuous)
 //   eyes: a spider looming L/R -> LPLC2 / LC4 looming detectors   (continuous)
 //   bumping a wall             -> mechanosensory neurons           (continuous)
-//   eating                     -> sugar GRNs, 200 Hz for 0.4 s     (trial)
-//   catching a new scent L/R   -> olfactory receptor neurons       (trial)
+//   a wall ahead L/R           -> LPLC2 / LC4, gently             (continuous)
+//   odour at each antenna      -> that side's olfactory receptors  (continuous)
+//   proboscis on sugar         -> sugar GRNs, 100 Hz               (continuous)
+//   hunger (internal state)    -> DNp09 walk command, 8-45 Hz      (continuous)
+// The whole brain also fires spontaneously (0.5 Hz per neuron), so its
+// descending neurons fluctuate on their own: that is where the fly's
+// autonomous turns come from.
 // Neural controls (the player, like optogenetic stimulation):
 //   explore -> DNp09 walk command · steer -> DNa02 left / right · reward -> PAM dopamine
 // Descending / motor neurons -> behaviour (motor()):
@@ -23,7 +28,61 @@ export const CONNECTOME_URL = 'connectome/flywire783.bin.gz';
 const SERVER_TIMEOUT_MS = 6000;
 const RASTER_MS = 4000;
 /** Descending-neuron rates (Hz) that mean "full" command. */
-export const MOTOR_SCALE = { walk: 60, turn: 60, escape: 40, feed: 5, groom: 12 };
+// escape: spontaneous DNp01 activity is 5-10 Hz and a wall's gentle looming ~30 Hz; an approaching spider drives it past 100
+export const MOTOR_SCALE = { walk: 40, turn: 30, escape: 70, feed: 8, groom: 12 };
+/** Hunger -> DNp09 drive (Hz): a sated fly idles, a hungry one explores. */
+export const HUNGER_HZ = { min: 8, max: 45 };
+
+/**
+ * The fly's senses -> Poisson rates (Hz) of its sensory neuron groups. Pure (shared with scripts/autonomy.mjs).
+ * @param {{threatL:number, threatR:number, wallL:number, wallR:number, odorL:number, odorR:number, taste:number}} sensors
+ * @param {{speed:number, turn:number}} motion
+ * @param {boolean} touching
+ */
+export function senseRates(sensors, motion, touching) {
+  // image motion on each eye: self-motion flow plus anything moving nearby
+  const flow = 0.7 * motion.speed + 0.4 * Math.abs(motion.turn);
+  const clamp = (x) => Math.max(0, Math.min(1, x));
+  return {
+    ...sensoryDrive({
+      visionL: flow + 0.3 * sensors.threatL,
+      visionR: flow + 0.3 * sensors.threatR,
+      // an approaching spider looms hard; a wall ahead looms gently (steering away, no escape)
+      loomL: Math.max(sensors.threatL / 1.2, 0.1 * clamp(sensors.wallL ?? 0)),
+      loomR: Math.max(sensors.threatR / 1.2, 0.1 * clamp(sensors.wallR ?? 0)),
+      touch: touching ? 1 : 0,
+    }),
+    // smell: odour at each antenna -> that side's olfactory receptor neurons
+    olfactoryL: 40 * clamp((sensors.odorL ?? 0) / 0.8),
+    olfactoryR: 40 * clamp((sensors.odorR ?? 0) / 0.8),
+    // taste: legs / proboscis on sugar -> sugar gustatory receptor neurons
+    sugar: 150 * clamp(sensors.taste ?? 0),
+  };
+}
+
+/**
+ * Descending / motor neuron rates -> motor command. Pure: the page and the
+ * autonomy check (scripts/autonomy.mjs) use the same readout.
+ * @param {object} G  frame.groups (Hz)
+ * @param {{turnBaseline:number}} state  slow resting steering asymmetry, updated here
+ * @param {object} controls  the player's stimulation (steering is excluded from the baseline)
+ */
+export function motorFromGroups(G, state, controls, dt) {
+  const diff = G.steerR + 0.5 * G.steer2R - (G.steerL + 0.5 * G.steer2L);
+  // remove the slow resting asymmetry, but only while nothing is steering on purpose
+  const steering = (controls.steerL ?? 0) > 0 || (controls.steerR ?? 0) > 0 || Math.max(G.escapeL, G.escapeR) > MOTOR_SCALE.escape;
+  if (!steering) state.turnBaseline += (diff - state.turnBaseline) * Math.min(1, dt / 8);
+  const turn = Math.max(-1, Math.min(1, (diff - state.turnBaseline) / MOTOR_SCALE.turn));
+  return {
+    turn,
+    walk: Math.min(1, G.walk / MOTOR_SCALE.walk),
+    escape: Math.max(G.escapeL, G.escapeR) > MOTOR_SCALE.escape,
+    escapeSide: G.escapeL > G.escapeR ? -1 : 1,
+    feed: G.feed > MOTOR_SCALE.feed,
+    groom: G.groom > MOTOR_SCALE.groom,
+    rates: G,
+  };
+}
 
 async function fetchConnectome(baseUrl, onProgress, signal) {
   const r = await fetch(`${baseUrl}${CONNECTOME_URL}`, { signal });
@@ -78,8 +137,6 @@ export class RealBrain {
     this.named = [];
     this.raster = []; // [{k, t}] spikes of the named neurons, last RASTER_MS of brain time
     this.touch = 0;
-    this.smellClock = 0;
-    this.lastOdor = 0;
     this.speed = 1;
     this.controls = {};
     this.turnBaseline = 0;
@@ -151,12 +208,15 @@ export class RealBrain {
         this.pendingReady = null;
         this.activity = new Uint8Array(n);
         this.becomeReady({ ...m, cluster, positions });
-      } else if (bytes[0] === 2 && this.activity) {
-        const k = new DataView(e.data).getUint32(4, true);
-        const idx = new Uint32Array(e.data, 8, k);
-        const val = new Uint8Array(e.data, 8 + k * 4, k);
-        this.activity.fill(0);
-        for (let j = 0; j < k; j++) this.activity[idx[j]] = val[j];
+      } else if (bytes[0] === 3 && this.activity) {
+        // 4 bits per neuron
+        const out = this.activity;
+        const packed = bytes.subarray(8);
+        for (let j = 0, i = 0; j < packed.length; j++, i += 2) {
+          const b = packed[j];
+          out[i] = (b & 0x0f) << 4;
+          if (i + 1 < out.length) out[i + 1] = b & 0xf0;
+        }
         this.freshActivity = true;
       }
     };
@@ -224,46 +284,25 @@ export class RealBrain {
 
   // ---- inputs ----
   /**
-   * Send the fly's current senses to the sensory neurons (call ~20 Hz).
-   * @param {{threatL:number, threatR:number, odorL:number, odorR:number}} sensors  game.sensors
+   * Send the fly's current senses to its sensory neurons (call ~20 Hz). All continuous:
+   * the brain is always live, so nothing is replayed as a scripted trial.
+   * @param {{threatL:number, threatR:number, wallL:number, wallR:number, odorL:number, odorR:number, taste:number}} sensors  game.sensors
    * @param {{speed:number, turn:number}} [motion]  the fly's own motion, 0..1 and -1..1
    */
   sense(sensors, dt, motion = { speed: 0, turn: 0 }) {
     if (!this.ready) return;
     this.touch = Math.max(0, this.touch - dt / 0.15);
-    // image motion on each eye: self-motion flow plus anything moving nearby
-    const flow = 0.7 * motion.speed + 0.4 * Math.abs(motion.turn);
-    this.send({
-      type: 'drive',
-      rates: sensoryDrive({
-        visionL: flow + 0.3 * sensors.threatL,
-        visionR: flow + 0.3 * sensors.threatR,
-        loomL: sensors.threatL / 1.2,
-        loomR: sensors.threatR / 1.2,
-        touch: this.touch > 0 ? 1 : 0,
-      }),
-    });
-    // a sniff trial when the scent gets clearly stronger, at most every 6 s
-    this.smellClock = Math.max(0, this.smellClock - dt);
-    const odor = sensors.odorL + sensors.odorR;
-    if (this.smellClock === 0 && odor > 0.35 && odor > this.lastOdor * 1.6 + 0.05) {
-      this.smellClock = 6;
-      this.trial(sensors.odorL >= sensors.odorR ? 'smellL' : 'smellR');
-    }
-    this.lastOdor += (odor - this.lastOdor) * Math.min(1, dt / 1.5);
-  }
-
-  trial(name) {
-    this.send({ type: 'trial', name });
-  }
-
-  /** The proboscis touches sugar: a short sugar-GRN trial (TRIALS.sugar). */
-  tasteSugar() {
-    this.trial('sugar');
+    this.send({ type: 'drive', rates: senseRates(sensors, motion, this.touch > 0) });
   }
 
   bump() {
     this.touch = 1;
+  }
+
+  /** Hunger (0..1): the fly's internal state, driving its walk command neurons (hungry flies explore more). */
+  hunger(level) {
+    const hz = Math.round(HUNGER_HZ.min + (HUNGER_HZ.max - HUNGER_HZ.min) * Math.max(0, Math.min(1, level)));
+    if (this.controls.hunger !== hz) this.control('hunger', hz);
   }
 
   /** Neural control: stimulate walk (DNp09), steerL / steerR (DNa02) or reward (PAM) at `hz`. */
@@ -295,21 +334,7 @@ export class RealBrain {
   motor(dt) {
     const f = this.frame;
     if (!f) return null;
-    const G = f.groups;
-    const diff = G.steerR + 0.5 * G.steer2R - (G.steerL + 0.5 * G.steer2L);
-    // remove a slow resting asymmetry, but only while nothing is steering on purpose
-    const steering = (this.controls.steerL ?? 0) > 0 || (this.controls.steerR ?? 0) > 0 || G.escapeL + G.escapeR > 20;
-    if (!steering) this.turnBaseline += (diff - this.turnBaseline) * Math.min(1, dt / 5);
-    const turn = Math.max(-1, Math.min(1, (diff - this.turnBaseline) / MOTOR_SCALE.turn));
-    return {
-      turn,
-      walk: Math.min(1, G.walk / MOTOR_SCALE.walk),
-      escape: Math.max(G.escapeL, G.escapeR) > MOTOR_SCALE.escape,
-      escapeSide: G.escapeL > G.escapeR ? -1 : 1,
-      feed: G.feed > MOTOR_SCALE.feed,
-      groom: G.groom > MOTOR_SCALE.groom,
-      rates: G,
-    };
+    return motorFromGroups(f.groups, this, this.controls, dt);
   }
 
   dispose() {

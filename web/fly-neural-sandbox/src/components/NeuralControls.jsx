@@ -40,13 +40,13 @@ export default function NeuralControls({ mode, onMode, explore, onExplore, onSte
       </div>
       <p className="mt-1 text-[11px] leading-snug text-neutral-500">
         {mode === 'neurons'
-          ? 'Every step, turn and jump comes from FlyWire descending neurons. You stimulate them, like optogenetics.'
+          ? 'It moves on its own: hunger drives its walk neurons, its own spontaneous activity turns it, its eyes, antennae and taste do the rest. You can add stimulation, like optogenetics.'
           : 'The genome model steers to food and tasks; the FlyWire brain still fires the escapes and feeding.'}
       </p>
 
       <label className="mt-2 flex items-center gap-2 text-[11px] text-neutral-300">
         <span className="w-24 shrink-0">
-          Explore <span className="text-neutral-500">DNp09</span>
+          Extra drive <span className="text-neutral-500">DNp09</span>
         </span>
         <input
           type="range"

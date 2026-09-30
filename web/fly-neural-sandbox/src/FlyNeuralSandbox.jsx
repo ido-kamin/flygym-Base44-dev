@@ -242,7 +242,7 @@ export default function FlyNeuralSandbox() {
   const [playback, setPlayback] = useState(1);
   const [real, setReal] = useState({ status: 'loading', progress: 0 });
   const [motorMode, setMotorMode] = useState('neurons');
-  const [explore, setExplore] = useState(30);
+  const [explore, setExplore] = useState(0);
   const [lesions, setLesions] = useState({});
   const [sideTab, setSideTab] = useState('proof');
   const [experiments, setExperiments] = useState([]);
@@ -373,7 +373,7 @@ export default function FlyNeuralSandbox() {
         if (disposed) return;
         brain.setConnectome(m.cluster, m.positions);
         setReal((r) => ({ ...r, status: 'ready', progress: 1, n: m.n, nnz: m.nnz, where: m.where, named: m.header?.named ?? [] }));
-        engine.real.control('walk', engine.explore ?? 30);
+        engine.real.control('walk', engine.explore ?? 0);
       },
       onFrame: (m, activity) => {
         if (activity) brain.setSpikes(activity);
@@ -445,11 +445,12 @@ export default function FlyNeuralSandbox() {
         engine.senseClock += dt;
         if (engine.senseClock >= SENSE_INTERVAL) {
           rb.sense(game.sensors, engine.senseClock, { speed: game.fly.v / MAX_SPEED, turn: game.fly.omega / MAX_TURN });
+          // internal state: hunger drives the walk command neurons (a sated fly idles)
+          rb.hunger(1 - game.energy / 100);
           engine.senseClock = 0;
         }
         for (const ev of events) {
-          if (ev.type === 'eat') rb.tasteSugar();
-          else if (ev.type === 'bump' || ev.type === 'hit') rb.bump();
+          if (ev.type === 'bump' || ev.type === 'hit') rb.bump();
         }
       }
       for (const ev of events) {
@@ -527,6 +528,9 @@ export default function FlyNeuralSandbox() {
           turnRate: game.fly.omega,
           turnCmd: game.brainMotor?.turn ?? 0,
           escaping: game.fly.escapeTimer > 0,
+          hungerHz: engine.real?.controls.hunger ?? 0,
+          exploreHz: engine.real?.controls.walk ?? 0,
+          taste: game.sensors.taste,
           mode: game.motorMode,
         });
       }

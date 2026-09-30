@@ -30,21 +30,13 @@ if (mode === 'selftest') {
     wmv: shared.wmv,
     post: (msg) => {
       if (msg.type !== 'frame') return parentPort.postMessage(msg);
-      // sparse per-neuron activity, 10 times a second (every other frame)
+      // per-neuron activity, 4 bits per neuron, 5 times a second (every 4th frame)
       const { activity, ...rest } = msg;
-      if (frames++ % 2 === 0) {
-        let k = 0;
-        for (let i = 0; i < activity.length; i++) if (activity[i] >= 4) k++;
-        const idx = new Uint32Array(k);
-        const val = new Uint8Array(k);
-        for (let i = 0, j = 0; i < activity.length; i++) {
-          if (activity[i] >= 4) {
-            idx[j] = i;
-            val[j++] = activity[i];
-          }
-        }
-        rest.sparse = { idx, val };
-        parentPort.postMessage(rest, [idx.buffer, val.buffer]);
+      if (frames++ % 4 === 0) {
+        const packed = new Uint8Array((activity.length + 1) >> 1);
+        for (let i = 0, j = 0; i < activity.length; i += 2, j++) packed[j] = (activity[i] >> 4) | (activity[i + 1] & 0xf0);
+        rest.packed = packed;
+        parentPort.postMessage(rest, [packed.buffer]);
       } else {
         parentPort.postMessage(rest);
       }

@@ -16,14 +16,14 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
 import { ARENA } from './constants.js';
 import { C } from './connectome.js';
-import { MAX_SPEED, MAX_TURN, MISSIONS, SEARCH_TOKEN } from './game.js';
+import { ESCAPE_TIME, MAX_SPEED, MAX_TURN, MISSIONS, SEARCH_TOKEN } from './game.js';
 import { CPGNetwork, descendingSignal, FlyRig, geometryFromBake } from './neuromechfly.js';
 
 /** Millimetres per game unit: 300 units/s (top speed) = 13.2 mm/s. */
 export const MM_PER_UNIT = 0.044;
 const TAU = Math.PI * 2;
-const ESCAPE_HOP = 1.6; // mm apex of the escape jump
-const ESCAPE_HOP_TIME = 0.38; // s
+const FLIGHT_ALT = 4.5; // mm apex of the escape flight
+const WING_HZ = 22; // drawn wingbeat (the real ~200 Hz would alias at 60 fps)
 
 /** Which connectome cluster lights up each body segment (by segment name). */
 export function clusterForSegment(seg) {
@@ -177,7 +177,7 @@ export class FlyBody3D {
     this.walking = rig.walking;
     this.onFloorClick = onFloorClick;
     this.time = 0;
-    this.hopT = -1;
+    this.wingRot = new THREE.Matrix4();
     /** Rhythmic motor drive per VNC neuromere (T1, T2, T3): swing-phase bursts. */
     this.rhythm = new Float32Array(3);
 
@@ -280,6 +280,10 @@ export class FlyBody3D {
     this.standHeight = measureStanceHeight(this.fly, posture.rotation.y);
     root.position.y = this.standHeight;
 
+    this.wings = [
+      [rig.bodies.findIndex((b) => b.name === 'l_wing'), 1],
+      [rig.bodies.findIndex((b) => b.name === 'r_wing'), -1],
+    ].filter(([i]) => i >= 0);
     this.bodyObjects = rig.bodies.map(() => {
       const o = new THREE.Object3D();
       o.matrixAutoUpdate = false;
@@ -376,7 +380,6 @@ export class FlyBody3D {
   /** Visual effects for game events. */
   consume(events) {
     for (const ev of events) {
-      if (ev.type === 'escape') this.hopT = 0;
       if (ev.type === 'eat') this.ring(ev.x, ev.y, 0xf5a524);
       if (ev.type === 'hit') this.ring(ev.x, ev.y, 0xef4444);
       if (ev.type === 'predator') this.ring(ev.x, ev.y, 0xef4444);
@@ -403,7 +406,8 @@ export class FlyBody3D {
     this.time += h;
     const f = game.fly;
     const behaviour = game.behaviour;
-    const still = game.over || behaviour === 'feed' || behaviour === 'groom';
+    const flying = f.escapeTimer > 0;
+    const still = game.over || behaviour === 'feed' || behaviour === 'groom' || flying;
     const drive = still ? 0 : Math.min(1, f.v / MAX_SPEED);
     const turn = f.omega / MAX_TURN;
     const [left, right] = descendingSignal(drive, turn);
@@ -417,6 +421,10 @@ export class FlyBody3D {
         const rub = Math.sin(this.time * TAU * 6 + (li === 3 ? Math.PI : 0));
         this.fly.setLegFromStep(li, Math.PI * 0.9 + 0.55 * rub, 1.1);
         this.swing[li] = true;
+      } else if (flying) {
+        // legs tucked in flight
+        this.fly.setLegFromStep(li, Math.PI * 0.55, 0.9);
+        this.swing[li] = false;
       } else {
         this.fly.setLegFromStep(li, phase, mags[li]);
         this.swing[li] = mags[li] > 0.05 && this.fly.inSwing(li, phase);
@@ -428,18 +436,21 @@ export class FlyBody3D {
     }
     const world = this.fly.update();
     for (let i = 0; i < world.length; i++) this.bodyObjects[i].matrix.copy(world[i]);
+    // wings: folded on the back when walking; flapping in flight (and a buzz while feeding / grooming off)
+    if (flying) {
+      const a = Math.sin(this.time * TAU * WING_HZ);
+      for (const [idx, sgn] of this.wings) {
+        this.wingRot.makeRotationX(sgn * (0.2 + 0.9 * a));
+        this.bodyObjects[idx].matrix.multiply(this.wingRot);
+      }
+    }
 
     // place the fly in the arena; the escape is a jump
     toScene(f.x, f.y, this.flyGroup.position);
     this.flyGroup.rotation.y = -f.theta;
-    let hop = 0;
-    if (this.hopT >= 0) {
-      this.hopT += h;
-      const u = this.hopT / ESCAPE_HOP_TIME;
-      if (u >= 1) this.hopT = -1;
-      else hop = ESCAPE_HOP * 4 * u * (1 - u);
-    }
-    this.root.position.y = this.standHeight + hop;
+    // the escape flight: take off, fly, land (the flight path itself is the game's)
+    const u = flying ? 1 - f.escapeTimer / ESCAPE_TIME : 0;
+    this.root.position.y = this.standHeight + (flying ? FLIGHT_ALT * Math.sin(Math.PI * u) : 0);
 
     for (const m of this.materials) {
       const a = Math.min(1.2, activity[m.cluster] ?? 0);
