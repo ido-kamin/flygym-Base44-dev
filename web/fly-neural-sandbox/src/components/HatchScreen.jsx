@@ -1,7 +1,7 @@
 import { useState } from 'react';
 
 import { personality } from '../lib/genome.js';
-import { MISSION_META, randomFlyName } from '../lib/progress.js';
+import { randomFlyName } from '../lib/progress.js';
 
 /** Starter genomes (6 x 4-bit genes: sugar, threat, dopamine, steering, drive, chaos). */
 export const STARTERS = [
@@ -10,26 +10,18 @@ export const STARTERS = [
   { key: 'genius', egg: '💎', label: 'Brainy', weights: [13, 7, 12, 11, 8, 3] },
 ];
 
-const MISSION_BLURB = {
-  forage: 'Feed it sugar, dodge spiders, watch the dopamine fly.',
-  build: 'It walks a Base44 builder and ships a real app.',
-  search: 'It googles things with its antennae and reads the web.',
-  vibe: 'It vibecodes a meme token on Base. Satire included.',
-};
-
 /**
- * First screen: name the fly, pick a starter brain and a mission.
+ * First screen: name the fly and pick a starter brain (the Home screen comes next).
  * `adopting` = opened from a shared DNA link (the genome is already set).
  */
-export default function HatchScreen({ defaultName, adopting, dna, defaultMission, onHatch }) {
+export default function HatchScreen({ defaultName, adopting, dna, onHatch }) {
   const [name, setName] = useState(defaultName || randomFlyName());
   const [starter, setStarter] = useState(STARTERS[0].key);
-  const [mission, setMission] = useState(defaultMission || 'build');
 
   const submit = (e) => {
     e.preventDefault();
     const pick = STARTERS.find((s) => s.key === starter);
-    onHatch({ name: name.trim() || randomFlyName(), mission, weights: adopting ? null : pick.weights });
+    onHatch({ name: name.trim() || randomFlyName(), weights: adopting ? null : pick.weights });
   };
 
   return (
@@ -108,30 +100,6 @@ export default function HatchScreen({ defaultName, adopting, dna, defaultMission
             </div>
           </fieldset>
         )}
-
-        <fieldset className="mt-5">
-          <legend className="text-[11px] font-bold uppercase tracking-wider text-neutral-400">First mission</legend>
-          <div className="mt-1.5 grid grid-cols-2 gap-2">
-            {Object.entries(MISSION_META).map(([key, m]) => {
-              const on = mission === key;
-              return (
-                <button
-                  key={key}
-                  type="button"
-                  onClick={() => setMission(key)}
-                  aria-pressed={on}
-                  data-testid={`mission-${key}`}
-                  className={`rounded-xl border p-3 text-left transition ${on ? 'border-accent bg-accent/10' : 'border-white/10 bg-white/[0.02] hover:border-white/25'}`}
-                >
-                  <div className="text-sm font-semibold text-white">
-                    {m.icon} {m.label}
-                  </div>
-                  <div className="mt-0.5 text-[11px] leading-snug text-neutral-400">{MISSION_BLURB[key]}</div>
-                </button>
-              );
-            })}
-          </div>
-        </fieldset>
 
         <button
           type="submit"

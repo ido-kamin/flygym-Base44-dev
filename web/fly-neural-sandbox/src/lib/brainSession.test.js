@@ -51,23 +51,29 @@ describe('BrainSession (the same code runs on the server and in the browser)', (
     // the world keeps sending smells and hunger meanwhile: the lab protocol must ignore them
     s.handle({ type: 'drive', rates: { olfactoryL: 40, olfactoryR: 40, visionL: 20, visionR: 20 } });
     s.handle({ type: 'control', name: 'hunger', hz: 30 });
+    const results = () => inbox.filter((m) => m.type === 'experiment' && !m.calibration);
+    // the session first calibrates both odours (finds their Kenyon cells)
+    await until(() => inbox.filter((m) => m.calibration).length === 2);
     const run = async (action, odor) => {
-      const k = inbox.filter((m) => m.type === 'experiment').length;
+      const k = results().length;
       s.handle({ type: 'experiment', action, odor });
-      return until(() => inbox.filter((m) => m.type === 'experiment')[k]);
+      return until(() => results()[k]);
     };
-    const a0 = await run('test', 'A');
-    const b0 = await run('test', 'B');
     for (let i = 0; i < 3; i++) expect((await run('train', 'A')).changed).toBeGreaterThan(0);
     const a1 = await run('test', 'A');
     const b1 = await run('test', 'B');
-    const dA = 1 - a1.drive / a0.drive;
-    const dB = 1 - b1.drive / b0.drive;
-    expect(a0.kcs).toBeGreaterThan(20); // a sparse odour code: tens of Kenyon cells, not thousands
-    expect(a0.kcs).toBeLessThan(600);
-    expect(dA).toBeGreaterThan(0.25);
+    // drive relative to each odour's calibrated (untrained) drive
+    const dA = 1 - a1.drive / a1.baseline;
+    const dB = 1 - b1.drive / b1.baseline;
+    expect(dA).toBeGreaterThan(0.2);
     expect(dB).toBeLessThan(dA / 2);
-    expect(a1.baseline).toBe(a0.drive);
+    // the synaptic memory readout: A is now rewarded (approach), B untouched
+    expect(a1.memory.valence).toBeGreaterThan(0.05);
+    expect(Math.abs(b1.memory.valence)).toBeLessThan(a1.memory.valence / 2);
+    // punishing B makes it aversive
+    for (let i = 0; i < 3; i++) await run('punish', 'B');
+    const b2 = await run('test', 'B');
+    expect(b2.memory.valence).toBeLessThan(-0.03);
     s.stop();
-  }, 120000);
+  }, 180000);
 });

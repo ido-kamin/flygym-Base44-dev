@@ -101,10 +101,14 @@ def bake(model: mj.MjModel) -> tuple[dict, bytes]:
     mj.mj_forward(model, data)
 
     # ---- bodies: every fly body (skip the world body 0) ----
-    fly_bodies = [b for b in range(1, model.nbody) if model.body(b).name.startswith("nmf")]
+    fly_bodies = [
+        b for b in range(1, model.nbody) if model.body(b).name.startswith("nmf")
+    ]
     index_of = {b: i for i, b in enumerate(fly_bodies)}
     root = fly_bodies[0]
-    assert short(model.body(root).name) == "c_thorax", "expected c_thorax as the fly root"
+    assert short(model.body(root).name) == "c_thorax", (
+        "expected c_thorax as the fly root"
+    )
 
     # ---- hinge joints (the root free joint is replaced by the game's own pose) ----
     joints = []
@@ -132,11 +136,18 @@ def bake(model: mj.MjModel) -> tuple[dict, bytes]:
                 "name": short(model.body(b).name),
                 "parent": index_of.get(parent, -1),
                 # the root's placement comes from the game; keep only its height
-                "pos": [0.0, 0.0, 0.0] if b == root else [round(float(v), 6) for v in model.body_pos[b]],
-                "quat": [1.0, 0.0, 0.0, 0.0] if b == root else [round(float(v), 6) for v in model.body_quat[b]],
+                "pos": [0.0, 0.0, 0.0]
+                if b == root
+                else [round(float(v), 6) for v in model.body_pos[b]],
+                "quat": [1.0, 0.0, 0.0, 0.0]
+                if b == root
+                else [round(float(v), 6) for v in model.body_quat[b]],
                 "joints": [
                     joint_index[j]
-                    for j in range(model.body_jntadr[b], model.body_jntadr[b] + model.body_jntnum[b])
+                    for j in range(
+                        model.body_jntadr[b],
+                        model.body_jntadr[b] + model.body_jntnum[b],
+                    )
                     if j in joint_index
                 ],
             }
@@ -170,7 +181,11 @@ def bake(model: mj.MjModel) -> tuple[dict, bytes]:
         blob += faces.astype(np.uint16).tobytes()
 
         segment = short(model.geom(g).name)
-        rgba = seg_color.get(segment) or seg_color.get(short(model.body(b).name)) or [0.7, 0.7, 0.7, 1.0]
+        rgba = (
+            seg_color.get(segment)
+            or seg_color.get(short(model.body(b).name))
+            or [0.7, 0.7, 0.7, 1.0]
+        )
         geoms.append(
             {
                 "segment": segment,
@@ -197,11 +212,17 @@ def bake(model: mj.MjModel) -> tuple[dict, bytes]:
         leg, dof = game._parse_actuator_joint(short(model.joint(j).name))
         if leg is not None and dof is not None:
             leg_dof_joint[legs.index(leg)][dof] = joint_index[j]
-    assert all(all(x is not None for x in row) for row in leg_dof_joint), "unmapped actuated DoF"
+    assert all(all(x is not None for x in row) for row in leg_dof_joint), (
+        "unmapped actuated DoF"
+    )
 
     # ---- ground offset: lowest foot in the neutral pose touches z = 0 ----
     root_z = float(data.xpos[root][2])
-    foot_z = min(float(data.xpos[b][2]) for b in fly_bodies if short(model.body(b).name).endswith("tarsus5"))
+    foot_z = min(
+        float(data.xpos[b][2])
+        for b in fly_bodies
+        if short(model.body(b).name).endswith("tarsus5")
+    )
 
     # ---- baked preprogrammed steps (the game builder's own baking, resampled) ----
     game.N_PHASE_SAMPLES = N_PHASE_SAMPLES
@@ -229,7 +250,10 @@ def bake(model: mj.MjModel) -> tuple[dict, bytes]:
             "intrinsicFreq": CPG_INTRINSIC_FREQ,
             "intrinsicAmp": CPG_INTRINSIC_AMP,
             "convergenceCoef": CPG_CONVERGENCE_COEF,
-            "couplingWeights": (game._tripod_phase_biases > 0).astype(float).__mul__(CPG_COUPLING_STRENGTH).tolist(),
+            "couplingWeights": (game._tripod_phase_biases > 0)
+            .astype(float)
+            .__mul__(CPG_COUPLING_STRENGTH)
+            .tolist(),
             "phaseBiases": game._tripod_phase_biases.tolist(),
         },
         "preprogrammed": steps,
@@ -237,7 +261,9 @@ def bake(model: mj.MjModel) -> tuple[dict, bytes]:
     return rig, bytes(blob)
 
 
-def calibrate_walking(model: mj.MjModel, duration: float = 1.5, settle: float = 0.5) -> dict:
+def calibrate_walking(
+    model: mj.MjModel, duration: float = 1.5, settle: float = 0.5
+) -> dict:
     """Walk the model in MuJoCo physics under flygym's CPG and measure the gait.
 
     Same controller as the in-repo browser game / tutorial 4a-4d: tripod CPG at
@@ -255,7 +281,9 @@ def calibrate_walking(model: mj.MjModel, duration: float = 1.5, settle: float = 
             leg = short(model.body(int(model.actuator_trnid[a][0])).name).split("_")[0]
             adhesion[legs.index(leg)] = a
             continue
-        leg, d = game._parse_actuator_joint(short(model.joint(int(model.actuator_trnid[a][0])).name))
+        leg, d = game._parse_actuator_joint(
+            short(model.joint(int(model.actuator_trnid[a][0])).name)
+        )
         if leg is not None and d is not None:
             cmap[legs.index(leg)][d] = a
     pb = game._tripod_phase_biases
@@ -268,25 +296,33 @@ def calibrate_walking(model: mj.MjModel, duration: float = 1.5, settle: float = 
         rng = np.random.default_rng(0)
         phases = rng.uniform(0, 2 * np.pi, 6)
         mags = np.zeros(6)
-        amps = np.array([abs(gain_left)] * 3 + [abs(gain_right)] * 3) * CPG_INTRINSIC_AMP
+        amps = (
+            np.array([abs(gain_left)] * 3 + [abs(gain_right)] * 3) * CPG_INTRINSIC_AMP
+        )
         freqs = CPG_INTRINSIC_FREQ * np.array(
             [1 if gain_left >= 0 else -1] * 3 + [1 if gain_right >= 0 else -1] * 3
         )
         zs, pitches, xys, yaws = [], [], [], []
         for k in range(int(duration / dt)):
-            coupling = (mags[None, :] * w * np.sin(phases[None, :] - phases[:, None] - pb)).sum(1)
+            coupling = (
+                mags[None, :] * w * np.sin(phases[None, :] - phases[:, None] - pb)
+            ).sum(1)
             phases += (2 * np.pi * freqs + coupling) * dt
             mags += CPG_CONVERGENCE_COEF * (amps - mags) * dt
             for i, leg in enumerate(legs):
                 angles = steps.get_joint_angles(leg, phases[i], mags[i])
                 for d in range(7):
                     data.ctrl[cmap[i][d]] = angles[d]
-                data.ctrl[adhesion[i]] = 1.0 if steps.get_adhesion_onoff(leg, phases[i]) else 0.0
+                data.ctrl[adhesion[i]] = (
+                    1.0 if steps.get_adhesion_onoff(leg, phases[i]) else 0.0
+                )
             mj.mj_step(model, data)
             if k * dt >= settle and k % 20 == 0:
                 qw, qx, qy, qz = data.qpos[3:7]
                 pitches.append(np.arcsin(np.clip(2 * (qw * qy - qz * qx), -1, 1)))
-                yaws.append(np.arctan2(2 * (qw * qz + qx * qy), 1 - 2 * (qy * qy + qz * qz)))
+                yaws.append(
+                    np.arctan2(2 * (qw * qz + qx * qy), 1 - 2 * (qy * qy + qz * qz))
+                )
                 zs.append(float(data.qpos[2]))
                 xys.append(data.qpos[:2].copy())
         span = (len(xys) - 1) * 20 * dt
@@ -305,19 +341,26 @@ def calibrate_walking(model: mj.MjModel, duration: float = 1.5, settle: float = 
     straight = [walk(a, a) for a in amps]
     turns = [(walk(1.0, r), 1.0 - r) for r in (0.6, 0.2)]
     for a, r in zip(amps, straight):
-        print(f"  physics walk amp {a:.2f}: {r['speed']:.2f} mm/s, thorax z {r['z']:.3f} mm")
+        print(
+            f"  physics walk amp {a:.2f}: {r['speed']:.2f} mm/s, thorax z {r['z']:.3f} mm"
+        )
     yaw_per_diff = float(np.mean([t["yaw"] / diff for t, diff in turns]))
     print(f"  physics turn: yaw {yaw_per_diff:.3f} rad/s per unit (L - R) amplitude")
     return {
         "thoraxHeight": round(float(np.mean([r["z"] for r in straight])), 4),
         "pitch": round(float(np.mean([r["pitch"] for r in straight])), 5),
-        "speedByAmp": {"amp": [0.0, *amps], "mmPerS": [0.0, *[round(r["speed"], 4) for r in straight]]},
+        "speedByAmp": {
+            "amp": [0.0, *amps],
+            "mmPerS": [0.0, *[round(r["speed"], 4) for r in straight]],
+        },
         # MuJoCo frame (z up, y left): positive yaw = counter-clockwise from above
         "yawPerAmpDiff": round(yaw_per_diff, 5),
     }
 
 
-def fk_fixture(model: mj.MjModel, fly_bodies: list[int], joint_index: dict[int, int]) -> dict:
+def fk_fixture(
+    model: mj.MjModel, fly_bodies: list[int], joint_index: dict[int, int]
+) -> dict:
     """MuJoCo's own forward kinematics at a random pose, for the JS unit test.
 
     Hinge angles are the neutral keyframe plus seeded noise; body positions are
@@ -335,7 +378,8 @@ def fk_fixture(model: mj.MjModel, fly_bodies: list[int], joint_index: dict[int, 
     root = fly_bodies[0]
     r_root = data.xmat[root].reshape(3, 3)
     positions = [
-        [round(float(v), 7) for v in r_root.T @ (data.xpos[b] - data.xpos[root])] for b in fly_bodies
+        [round(float(v), 7) for v in r_root.T @ (data.xpos[b] - data.xpos[root])]
+        for b in fly_bodies
     ]
     return {"angles": [round(a, 9) for a in angles], "bodyPositions": positions}
 

@@ -16,6 +16,8 @@ import { ClaimDeploymentModal } from './components/ClaimDeployment.jsx';
 import DnaPanel from './components/DnaPanel.jsx';
 import { FlyCodeTerminal, FlyStatus } from './components/FlyCodeTerminal.jsx';
 import HatchScreen from './components/HatchScreen.jsx';
+import HomeScreen from './components/HomeScreen.jsx';
+import SandboxPanel from './components/SandboxPanel.jsx';
 import LabDrawer from './components/LabDrawer.jsx';
 import LearningPanel from './components/LearningPanel.jsx';
 import NeuralControls from './components/NeuralControls.jsx';
@@ -24,7 +26,7 @@ import SidePanel from './components/SidePanel.jsx';
 import MissionStage from './components/MissionStage.jsx';
 import { GameOverOverlay, Toast } from './components/Overlays.jsx';
 import ShipModal from './components/ShipModal.jsx';
-import TopBar from './components/TopBar.jsx';
+import TopBar, { BUILD_MISSIONS } from './components/TopBar.jsx';
 import {
   bitsOf,
   decodeBase44,
@@ -63,6 +65,13 @@ const REAL_HZ_FULL = 12; // a region's mean rate (Hz) shown as fully active
 const STEER_HZ = 80; // DNa02 stimulation while a steer control is held
 const REWARD_MS = 400; // PAM dopamine pulse
 const EXPERIMENT_TIMEOUT_MS = 20000;
+
+/** The three modes and the mission each one plays. */
+function modeOf(mission) {
+  if (mission === 'sandbox') return 'sandbox';
+  if (mission === 'forage') return 'train';
+  return 'build';
+}
 
 function hashParams(hash) {
   try {
@@ -233,9 +242,11 @@ export default function FlyNeuralSandbox() {
   const bodyHostRef = useRef(null);
   const canvasRef = useRef(null);
   const engineRef = useRef(null);
-  const armedRef = useRef(false);
+  const toolRef = useRef('sugar');
   const [hud, setHud] = useState(null);
-  const [armed, setArmed] = useState(false);
+  // what a click on the floor drops: sugar | spider | odorA | odorB
+  const [tool, setTool] = useState('sugar');
+  const armed = tool === 'spider';
   const [toast, setToast] = useState(null);
   const [copied, setCopied] = useState(false);
   const [bodyStatus, setBodyStatus] = useState('loading');
@@ -244,7 +255,10 @@ export default function FlyNeuralSandbox() {
   const [motorMode, setMotorMode] = useState('neurons');
   const [explore, setExplore] = useState(0);
   const [lesions, setLesions] = useState({});
-  const [sideTab, setSideTab] = useState('proof');
+  const [sideTab, setSideTab] = useState(() => {
+    const m = readMission(window.location.hash);
+    return m === 'sandbox' ? 'sandbox' : m === 'forage' ? 'learn' : 'proof';
+  });
   const [experiments, setExperiments] = useState([]);
   const [motor, setMotor] = useState(null);
   const [mission, setMissionState] = useState(() => readMission(window.location.hash) ?? 'build');
@@ -254,6 +268,10 @@ export default function FlyNeuralSandbox() {
     return p ?? { name: shared?.slice(0, 32) || randomFlyName(), xp: 0, hatched: false };
   });
   const [hatchOpen, setHatchOpen] = useState(() => !loadProfile()?.hatched);
+  // Home: on every visit (unless a shared link names a mission), after hatching, and from the nav
+  const [homeOpen, setHomeOpen] = useState(() => Boolean(loadProfile()?.hatched) && !readMission(window.location.hash));
+  const [stimuli, setStimuli] = useState({});
+  const [background, setBackgroundState] = useState(0.5);
   const [labOpen, setLabOpen] = useState(false);
   const [claimOpen, setClaimOpen] = useState(false);
   const [shipOpen, setShipOpen] = useState(false);
@@ -279,8 +297,8 @@ export default function FlyNeuralSandbox() {
   }, [copied]);
 
   useEffect(() => {
-    armedRef.current = armed;
-  }, [armed]);
+    toolRef.current = tool;
+  }, [tool]);
 
   // ---- engine lifecycle: one game, one brain, one body, one browser view, one loop ----
   useEffect(() => {
@@ -338,7 +356,12 @@ export default function FlyNeuralSandbox() {
     let disposed = false;
     const onFloorClick = (x, y) => {
       if (game.over) return;
-      if (armedRef.current) {
+      const t = toolRef.current;
+      if ((t === 'odorA' || t === 'odorB') && game.mission === 'sandbox') {
+        game.addOdor(x, y, t === 'odorA' ? 'A' : 'B');
+        return;
+      }
+      if (t === 'spider') {
         if (!game.addPredator(x, y)) showToast(`Max ${PREDATOR_MAX} spiders — that's plenty`, 'warn');
       } else if (!game.addSugar(x, y)) {
         showToast('The arena is full already', 'info');
@@ -519,7 +542,7 @@ export default function FlyNeuralSandbox() {
         const f = rb.frame;
         setReal((r) =>
           r.status === 'ready'
-            ? { ...r, stats: f.stats, groups: f.groups, where: f.where && r.where ? { ...r.where, ...f.where } : r.where }
+            ? { ...r, stats: f.stats, groups: f.groups, memory: f.memory, where: f.where && r.where ? { ...r.where, ...f.where } : r.where }
             : r,
         );
         // the body's motion, to show next to the neurons that caused it
@@ -606,7 +629,7 @@ export default function FlyNeuralSandbox() {
   );
 
   const onHatch = useCallback(
-    ({ name, mission: m, weights }) => {
+    ({ name, weights }) => {
       const e = engineRef.current;
       setHatchOpen(false);
       if (!e) return;
@@ -615,10 +638,10 @@ export default function FlyNeuralSandbox() {
       saveProfile(e.profile);
       setProfile(e.profile);
       e.brain.consume([{ type: 'levelup', generation: 1 }]);
-      onMission(m);
-      showToast(`🐣 ${name} hatched! ${MISSION_META[m].icon} First mission: ${MISSION_META[m].label}`, 'ok');
+      setHomeOpen(true);
+      showToast(`🐣 ${name} hatched! Pick a mode to start.`, 'ok');
     },
-    [onMission, showToast],
+    [showToast],
   );
 
   const onCopy = useCallback(async () => {
@@ -686,7 +709,7 @@ export default function FlyNeuralSandbox() {
     onRestart();
   }, [onMutate, onRestart]);
 
-  const onTogglePredator = useCallback(() => setArmed((a) => !a), []);
+  const onTogglePredator = useCallback(() => setTool((t) => (t === 'spider' ? 'sugar' : 'spider')), []);
 
   const onBuildBase44 = useCallback(async () => {
     const e = engineRef.current;
@@ -718,7 +741,10 @@ export default function FlyNeuralSandbox() {
       if (!e || e.game.over) return;
       const p = e.view.clientToWorld(ev.clientX, ev.clientY);
       if (!p) return;
-      if (armedRef.current) {
+      const t = toolRef.current;
+      if ((t === 'odorA' || t === 'odorB') && e.game.mission === 'sandbox') {
+        e.game.addOdor(p.x, p.y, t === 'odorA' ? 'A' : 'B');
+      } else if (t === 'spider') {
         if (!e.game.addPredator(p.x, p.y)) showToast(`Max ${PREDATOR_MAX} spiders — that's plenty`, 'warn');
       } else if (!e.game.addSugar(p.x, p.y)) {
         showToast('The arena is full already', 'info');
@@ -732,7 +758,7 @@ export default function FlyNeuralSandbox() {
     const e = engineRef.current;
     if (!e) return;
     const p = e.view.clientToWorld(ev.clientX, ev.clientY);
-    e.view.setCursor(p ? { ...p, armed: armedRef.current } : null);
+    e.view.setCursor(p ? { ...p, armed: toolRef.current === 'spider' } : null);
   }, []);
 
   const onPlaygroundLeave = useCallback(() => engineRef.current?.view.setCursor(null), []);
@@ -746,6 +772,53 @@ export default function FlyNeuralSandbox() {
       const e = engineRef.current;
       if (e) e.game.motorMode = m;
       showToast(m === 'neurons' ? 'Neurons only: every movement now comes from FlyWire descending neurons' : 'Autopilot: the genome model steers, the FlyWire brain still fires escapes and feeding', 'info');
+    },
+    [showToast],
+  );
+  const onMode = useCallback(
+    (k) => {
+      setHomeOpen(false);
+      const e = engineRef.current;
+      if (k === 'sandbox') {
+        onMission('sandbox');
+        setSideTab('sandbox');
+        setMotorMode('neurons');
+        if (e) e.game.motorMode = 'neurons';
+      } else if (k === 'train') {
+        onMission('forage');
+        setSideTab('learn');
+        setMotorMode('neurons');
+        if (e) e.game.motorMode = 'neurons';
+        setTool((t) => (t.startsWith('odor') ? 'sugar' : t));
+      } else {
+        const m = BUILD_MISSIONS.includes(e?.mission) ? e.mission : 'build';
+        onMission(m);
+        setSideTab('map');
+        // the build missions need the fly to reach tasks: the genome model steers, the brain still fires escapes and feeding
+        setMotorMode('assist');
+        if (e) e.game.motorMode = 'assist';
+        setTool((t) => (t.startsWith('odor') ? 'sugar' : t));
+      }
+    },
+    [onMission],
+  );
+  const onControl = useCallback((name, hz) => {
+    setStimuli((c) => ({ ...c, [name]: hz }));
+    engineRef.current?.real?.control(name, hz);
+  }, []);
+  const onBackground = useCallback((hz) => {
+    setBackgroundState(hz);
+    engineRef.current?.real?.background(hz);
+  }, []);
+  const onForget = useCallback(() => {
+    engineRef.current?.real?.resetLearning();
+    showToast('Forgotten: every KC→MBON synapse is back to its FlyWire weight', 'info');
+  }, [showToast]);
+  const onTeach = useCallback(
+    async (action, odor) => {
+      showToast(`${action === 'train' ? 'Rewarding' : 'Punishing'} odour ${odor}: the brain smells it and gets ${action === 'train' ? 'PAM' : 'PPL1'} dopamine`, 'info');
+      const r = await onExperimentRef.current?.(action, odor);
+      if (r) showToast(`Odour ${odor}: ${r.changed} synapses changed · memory ${r.memory?.valence > 0 ? 'approach' : r.memory?.valence < 0 ? 'avoid' : 'neutral'}`, 'ok');
     },
     [showToast],
   );
@@ -788,6 +861,8 @@ export default function FlyNeuralSandbox() {
       }),
     [],
   );
+  const onExperimentRef = useRef(null);
+  onExperimentRef.current = onExperiment;
   const onSelfTest = useCallback(async () => {
     const r = await fetch(new URL('api/brain/selftest', document.baseURI));
     if (!r.ok) throw new Error(r.status === 404 ? 'No server brain here (static hosting)' : `self-test failed: HTTP ${r.status}`);
@@ -823,9 +898,13 @@ export default function FlyNeuralSandbox() {
       else if (k === 'g') onGood();
       else if (k === 'b') onBad();
       else if (k === 'l') setLabOpen((o) => !o);
-      else if (['1', '2', '3', '4'].includes(k)) onMission(Object.keys(MISSION_META)[Number(k) - 1]);
+      else if (k === 'h') setHomeOpen((o) => !o);
+      else if (k === '1') onMode('sandbox');
+      else if (k === '2') onMode('train');
+      else if (k === '3') onMode('build');
       else if (k === 'escape') {
-        setArmed(false);
+        setTool('sugar');
+        setHomeOpen(false);
         setLabOpen(false);
       }
     };
@@ -840,7 +919,7 @@ export default function FlyNeuralSandbox() {
       window.removeEventListener('keydown', onKey);
       window.removeEventListener('keyup', onKeyUp);
     };
-  }, [onMutate, onRestart, onTogglePredator, onGood, onBad, onMission, onSteer, onReward]);
+  }, [onMutate, onRestart, onTogglePredator, onGood, onBad, onMode, onSteer, onReward]);
 
   const share = hud && engineRef.current ? shareUrl(engineRef.current, hud.dna) : '';
 
@@ -851,6 +930,9 @@ export default function FlyNeuralSandbox() {
           hud={hud}
           profile={profile}
           mission={mission}
+          mode={modeOf(mission)}
+          onMode={onMode}
+          onHome={() => setHomeOpen(true)}
           onMission={onMission}
           onLab={() => setLabOpen(true)}
           onShare={onCopy}
@@ -907,6 +989,24 @@ export default function FlyNeuralSandbox() {
             tab={sideTab}
             onTab={setSideTab}
             panes={{
+              sandbox: (
+                <SandboxPanel
+                  ready={real.status === 'ready'}
+                  controls={stimuli}
+                  onControl={onControl}
+                  lesions={lesions}
+                  onLesion={onLesion}
+                  background={background}
+                  onBackground={onBackground}
+                  memory={real.memory}
+                  onTeach={onTeach}
+                  onForget={onForget}
+                  tool={tool}
+                  onTool={setTool}
+                  inSandbox={mission === 'sandbox'}
+                  onEnter={() => onMode('sandbox')}
+                />
+              ),
               proof: <ProofPanel real={real} getRaster={getRaster} motor={motor} onSelfTest={onSelfTest} />,
               learn: <LearningPanel results={experiments} onExperiment={onExperiment} ready={real.status === 'ready'} stats={real.stats} />,
               map: (
@@ -962,12 +1062,12 @@ export default function FlyNeuralSandbox() {
           onCopyPrompt={onCopyPrompt}
         />
       )}
+      {homeOpen && !hatchOpen && hud && <HomeScreen profile={profile} real={real} onMode={onMode} current={modeOf(mission)} />}
       {hatchOpen && hud && (
         <HatchScreen
           defaultName={profile.name}
           adopting={adoptingRef.current}
           dna={hud.dna}
-          defaultMission={mission}
           onHatch={onHatch}
         />
       )}

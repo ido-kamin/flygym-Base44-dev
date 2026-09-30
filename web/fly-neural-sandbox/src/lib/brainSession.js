@@ -40,6 +40,19 @@ export const CONTROLS = {
   steerL: { label: 'Steering DNa02 left', ref: 'Rayshubskiy et al. 2020', group: 'steerL' },
   steerR: { label: 'Steering DNa02 right', ref: 'Rayshubskiy et al. 2020', group: 'steerR' },
   reward: { label: 'Dopamine PAM (reward)', ref: 'Liu et al. 2012', group: 'reward' },
+  punish: { label: 'Dopamine PPL1 (punishment)', ref: 'Aso et al. 2012', group: 'punish' },
+  // sandbox: stimulate any sensory group directly
+  stimSugar: { label: 'Sugar taste neurons', group: 'sugar' },
+  stimBitter: { label: 'Bitter taste neurons', group: 'bitter' },
+  stimLoomL: { label: 'Looming LPLC2/LC4 left', group: 'loomingL' },
+  stimLoomR: { label: 'Looming LPLC2/LC4 right', group: 'loomingR' },
+  stimSmellL: { label: 'Olfactory receptors left', group: 'olfactoryL' },
+  stimSmellR: { label: 'Olfactory receptors right', group: 'olfactoryR' },
+  stimLightL: { label: 'Photoreceptors left', group: 'visionL' },
+  stimLightR: { label: 'Photoreceptors right', group: 'visionR' },
+  stimTouch: { label: 'Mechanosensory neurons', group: 'mechano' },
+  stimEscape: { label: 'Giant fibers DNp01', group: 'escape' },
+  stimGroom: { label: 'Grooming DNg11 / DNg12', group: 'groom' },
 };
 /** Spontaneous firing of every neuron (Hz): background synaptic noise keeping the whole brain live. */
 export const BACKGROUND_HZ = 0.5;
@@ -69,7 +82,7 @@ export class BrainSession {
     this.background = background;
     this.brain.background = background;
     this.plasticity = G.kc
-      ? this.brain.enablePlasticity({ kc: G.kc.all, mbon: G.mbon.all, dan: G.dopamine.all })
+      ? this.brain.enablePlasticity({ kc: G.kc.all, mbon: G.mbon.all, dan: G.dopamine.all, punish: G.punish?.all ?? [] })
       : null;
     this.named = conn.header.named ?? [];
     this.brain.track(this.named.map((x) => x.idx));
@@ -87,8 +100,17 @@ export class BrainSession {
       steerL: G.steer.L,
       steerR: G.steer.R,
       reward: G.dopamine.all,
+      punish: G.punish?.all ?? [],
+      bitter: side(G.bitter),
+      escape: side(G.escape),
+      groom: side(G.groom),
+      // the two odours: both antennae (lab tests) and each antenna (odour sources in the world)
       odorA: side(G[ODORS.A]),
       odorB: side(G[ODORS.B]),
+      odorAL: G[ODORS.A]?.L ?? [],
+      odorAR: G[ODORS.A]?.R ?? [],
+      odorBL: G[ODORS.B]?.L ?? [],
+      odorBR: G[ODORS.B]?.R ?? [],
     };
     this.lesionGroups = {
       escape: side(G.escape),
@@ -102,6 +124,8 @@ export class BrainSession {
     this.lesions = {};
     this.protocol = null; // running trial / experiment
     this.memory = { A: null, B: null }; // untrained KC->MBON drive per odour
+    this.odorKCs = { A: null, B: null }; // each odour's Kenyon cells, from its first test
+    this.queue = []; // experiments waiting to run
     this.speed = 1;
     this.paused = false;
     this.looping = false;
@@ -114,9 +138,13 @@ export class BrainSession {
   }
 
   start() {
+    // calibrate: smell each odour once in a quiet brain, to find its Kenyon cells and untrained drive
+    this.queue.push(['test', 'A', true], ['test', 'B', true]);
     this.wallAtFrame = this.now();
     this.simAtFrame = this.brain.t;
     this.lastFrame = this.wallAtFrame;
+    const first = this.queue.shift();
+    if (first) this.startExperiment(...first);
     this.loop();
   }
 
@@ -148,6 +176,9 @@ export class BrainSession {
         break;
       case 'experiment':
         this.startExperiment(msg.action, msg.odor);
+        break;
+      case 'reset-learning':
+        this.resetLearning();
         break;
       case 'background':
         this.background = Math.max(0, Math.min(5, Number(msg.hz) || 0));
@@ -188,15 +219,19 @@ export class BrainSession {
     }
     const p = this.protocol?.phase;
     if (p?.drive) for (const [k, hz] of Object.entries(p.drive)) want[k] = Math.max(want[k] ?? 0, hz);
-    this.lastApplied ??= {};
-    for (const k of Object.keys(this.driveGroups)) {
-      const hz = want[k] ?? 0;
-      if (this.lastApplied[k] === hz) continue;
-      this.lastApplied[k] = hz;
-      this.brain.setDrive(this.driveGroups[k], hz);
+    // groups can share neurons (odour A = its left + right ORNs): each neuron gets the strongest drive
+    const next = new Map();
+    for (const [k, hz] of Object.entries(want)) {
+      const list = this.driveGroups[k];
+      if (!list || hz <= 0) continue;
+      for (const i of list) if ((next.get(i) ?? 0) < hz) next.set(i, hz);
     }
-    // dopamine counts for learning while the reward is on
-    if (this.brain.plastic) this.brain.plastic.enabled = (want.reward ?? 0) > 0;
+    const prev = this.appliedDrive ?? new Map();
+    for (const [i, hz] of next) if (prev.get(i) !== hz) this.brain.setDrive([i], hz);
+    for (const i of prev.keys()) if (!next.has(i)) this.brain.setDrive([i], 0);
+    this.appliedDrive = next;
+    // dopamine counts for learning while a reward or punishment is on
+    if (this.brain.plastic) this.brain.plastic.enabled = (want.reward ?? 0) > 0 || (want.punish ?? 0) > 0;
   }
 
   startTrial(name) {
@@ -210,16 +245,21 @@ export class BrainSession {
    * test = present the odour for 400 ms and measure its KC->MBON drive;
    * train = present it with a reward (PAM dopamine from 100 ms) and apply the learning rule.
    */
-  startExperiment(action, odor) {
-    if (this.protocol || !ODORS[odor] || !this.brain.plastic) return;
+  startExperiment(action, odor, calibration = false) {
+    if (!ODORS[odor] || !this.brain.plastic) return;
+    if (this.protocol) {
+      if (this.queue.length < 8) this.queue.push([action, odor, calibration]);
+      return;
+    }
     const key = `odor${odor}`;
-    const phases =
-      action === 'train'
-        ? [
-            { drive: { [key]: 50 }, ms: 100 },
-            { drive: { [key]: 50, reward: 80 }, ms: 300 },
-          ]
-        : [{ drive: { [key]: 50 }, ms: 400 }];
+    // train = odour + reward (PAM); punish = odour + punishment (PPL1); test = odour alone
+    const us = action === 'train' ? 'reward' : action === 'punish' ? 'punish' : null;
+    const phases = us
+      ? [
+          { drive: { [key]: 50 }, ms: 100 },
+          { drive: { [key]: 50, [us]: 80 }, ms: 300 },
+        ]
+      : [{ drive: { [key]: 50 }, ms: 400 }];
     const before = Uint32Array.from(this.brain.spikeCount);
     const changesBefore = this.brain.plastic.changes;
     this.runProtocol(`${action}${odor}`, phases, { quiet: true }, () => {
@@ -229,10 +269,13 @@ export class BrainSession {
       let kcs = 0;
       for (const i of this.G.kc.all) if (d[i]) kcs++;
       if (action === 'test' && this.memory[odor] === null) this.memory[odor] = drive;
+      if (action === 'test' && !this.odorKCs[odor]) this.odorKCs[odor] = this.G.kc.all.filter((i) => d[i] > 0);
       this.post({
         type: 'experiment',
         action,
         odor,
+        calibration,
+        memory: this.memoryOf(odor),
         ...ODOR_INFO[odor],
         drive,
         baseline: this.memory[odor],
@@ -271,6 +314,23 @@ export class BrainSession {
     p.done?.();
     this.brain.rest();
     this.brain.background = this.background;
+    const next = this.queue.shift();
+    if (next) this.startExperiment(...next);
+  }
+
+  /** Forget everything: all KC->MBON synapses back to their connectome weights. */
+  resetLearning() {
+    const p = this.brain.plastic;
+    if (!p) return;
+    for (const [e, w0] of p.original) this.brain.wmv[e] = w0;
+    p.changes = 0;
+    this.post({ type: 'experiment', action: 'reset', memory: this.memoryOf('A') });
+  }
+
+  /** What the brain has learned about an odour, read from its KC->MBON synapses (valence > 0: rewarded). */
+  memoryOf(odor) {
+    const kcs = this.odorKCs[odor];
+    return kcs ? this.brain.odorMemory(kcs) : null;
   }
 
   // ---- the clock ----
@@ -339,6 +399,7 @@ export class BrainSession {
         synapseStrength: b.plastic ? b.plasticStrength() : 1,
       },
       controls: { ...this.controlRates },
+      memory: { A: this.memoryOf('A'), B: this.memoryOf('B') },
       lesions: { ...this.lesions },
     });
     b.spikesThisWindow = 0;

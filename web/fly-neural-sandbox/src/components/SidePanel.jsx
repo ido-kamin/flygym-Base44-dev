@@ -1,4 +1,5 @@
 const TABS = [
+  ['sandbox', 'Sandbox'],
   ['proof', 'Is it real?'],
   ['learn', 'Learning'],
   ['map', 'Mission map'],

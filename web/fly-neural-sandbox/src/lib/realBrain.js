@@ -55,6 +55,11 @@ export function senseRates(sensors, motion, touching) {
     // smell: odour at each antenna -> that side's olfactory receptor neurons
     olfactoryL: 40 * clamp((sensors.odorL ?? 0) / 0.8),
     olfactoryR: 40 * clamp((sensors.odorR ?? 0) / 0.8),
+    // sandbox odour sources: odour A / B at each antenna -> that glomerulus' receptors on that side
+    odorAL: 60 * clamp(sensors.odorAL ?? 0),
+    odorAR: 60 * clamp(sensors.odorAR ?? 0),
+    odorBL: 60 * clamp(sensors.odorBL ?? 0),
+    odorBR: 60 * clamp(sensors.odorBR ?? 0),
     // taste: legs / proboscis on sugar -> sugar gustatory receptor neurons
     sugar: 150 * clamp(sensors.taste ?? 0),
   };
@@ -67,7 +72,7 @@ export function senseRates(sensors, motion, touching) {
  * @param {{turnBaseline:number}} state  slow resting steering asymmetry, updated here
  * @param {object} controls  the player's stimulation (steering is excluded from the baseline)
  */
-export function motorFromGroups(G, state, controls, dt) {
+export function motorFromGroups(G, state, controls, dt, memory = null) {
   const diff = G.steerR + 0.5 * G.steer2R - (G.steerL + 0.5 * G.steer2L);
   // remove the slow resting asymmetry, but only while nothing is steering on purpose
   const steering = (controls.steerL ?? 0) > 0 || (controls.steerR ?? 0) > 0 || Math.max(G.escapeL, G.escapeR) > MOTOR_SCALE.escape;
@@ -80,6 +85,7 @@ export function motorFromGroups(G, state, controls, dt) {
     escapeSide: G.escapeL > G.escapeR ? -1 : 1,
     feed: G.feed > MOTOR_SCALE.feed,
     groom: G.groom > MOTOR_SCALE.groom,
+    memory, // what the mushroom body has learned about odours A and B (valence per odour)
     rates: G,
   };
 }
@@ -315,6 +321,16 @@ export class RealBrain {
     this.send({ type: 'lesion', name, on });
   }
 
+  /** Spontaneous firing of every neuron (Hz). */
+  background(hz) {
+    this.send({ type: 'background', hz });
+  }
+
+  /** Forget: every KC->MBON synapse back to its connectome weight. */
+  resetLearning() {
+    this.send({ type: 'reset-learning' });
+  }
+
   /** Learning experiment: action 'test' | 'train', odor 'A' | 'B'. */
   experiment(action, odor) {
     this.send({ type: 'experiment', action, odor });
@@ -334,7 +350,7 @@ export class RealBrain {
   motor(dt) {
     const f = this.frame;
     if (!f) return null;
-    return motorFromGroups(f.groups, this, this.controls, dt);
+    return motorFromGroups(f.groups, this, this.controls, dt, f.memory);
   }
 
   dispose() {

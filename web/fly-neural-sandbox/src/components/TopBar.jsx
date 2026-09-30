@@ -1,7 +1,11 @@
 import { levelOf, levelProgress, MISSION_META } from '../lib/progress.js';
+import { MODES } from './HomeScreen.jsx';
+
+/** Missions reachable in the Build mode. */
+export const BUILD_MISSIONS = ['build', 'search', 'vibe'];
 
 /** Game header: the fly's identity + level, mission tabs, energy, actions. */
-export default function TopBar({ hud, profile, mission, onMission, onLab, onShare, copied }) {
+export default function TopBar({ hud, profile, mission, mode, onMode, onHome, onMission, onLab, onShare, copied }) {
   const level = levelOf(profile.xp);
   const progress = levelProgress(profile.xp);
   const energy = Math.max(0, Math.min(100, hud.energy));
@@ -30,25 +34,52 @@ export default function TopBar({ hud, profile, mission, onMission, onLab, onShar
           </div>
         </div>
 
-        <nav className="order-last flex w-full gap-0.5 overflow-x-auto rounded-lg bg-panel p-0.5 md:order-none md:w-auto" aria-label="Missions">
-          {Object.entries(MISSION_META).map(([key, m]) => {
-            const on = mission === key;
-            return (
+        <nav className="order-last flex w-full flex-wrap items-center gap-2 md:order-none md:w-auto" aria-label="Modes">
+          <button
+            type="button"
+            onClick={onHome}
+            data-testid="nav-home"
+            className="rounded-md px-2.5 py-1.5 text-xs font-medium text-neutral-400 ring-1 ring-inset ring-white/10 hover:text-neutral-100"
+          >
+            Home
+          </button>
+          <div className="flex gap-0.5 rounded-lg bg-panel p-0.5">
+            {Object.entries(MODES).map(([k, m]) => (
               <button
-                key={key}
+                key={k}
                 type="button"
-                onClick={() => onMission(key)}
-                aria-pressed={on}
-                data-testid={`tab-${key}`}
+                onClick={() => onMode(k)}
+                aria-pressed={mode === k}
+                data-testid={`nav-${k}`}
                 className={`shrink-0 rounded-md px-3 py-1.5 text-xs font-medium transition ${
-                  on ? 'bg-raised text-white ring-1 ring-white/10' : 'text-neutral-400 hover:text-neutral-100'
+                  mode === k ? 'bg-raised text-white ring-1 ring-white/10' : 'text-neutral-400 hover:text-neutral-100'
                 }`}
               >
                 <span className="mr-1">{m.icon}</span>
-                {m.label}
+                {m.title}
               </button>
-            );
-          })}
+            ))}
+          </div>
+          {mode === 'build' && (
+            <div className="flex gap-0.5" aria-label="Missions">
+              {BUILD_MISSIONS.map((key) => {
+                const m = MISSION_META[key];
+                const on = mission === key;
+                return (
+                  <button
+                    key={key}
+                    type="button"
+                    onClick={() => onMission(key)}
+                    aria-pressed={on}
+                    data-testid={`tab-${key}`}
+                    className={`shrink-0 rounded-md px-2 py-1 text-[11px] font-medium transition ${on ? 'text-accent' : 'text-neutral-500 hover:text-neutral-200'}`}
+                  >
+                    {m.icon} {m.label}
+                  </button>
+                );
+              })}
+            </div>
+          )}
         </nav>
 
         <div className="ml-auto flex items-center gap-3">

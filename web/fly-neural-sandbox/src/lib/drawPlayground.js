@@ -611,6 +611,19 @@ export function createPlaygroundView(canvas) {
     ctx.fillRect(0, 0, ARENA.w, ARENA.h);
     drawGrid(game);
     drawOdor(game);
+    // sandbox odour sources
+    for (const o of game.odorSources ?? []) {
+      ctx.save();
+      ctx.fillStyle = o.odor === 'A' ? 'rgba(245,165,36,0.16)' : 'rgba(56,189,248,0.16)';
+      ctx.beginPath();
+      ctx.arc(o.x, o.y, 60, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = o.odor === 'A' ? '#f5a524' : '#38bdf8';
+      ctx.font = '600 13px ui-sans-serif, system-ui, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(`Odour ${o.odor}`, o.x, o.y + 4);
+      ctx.restore();
+    }
     drawTrail(game);
     mission = game.mission ?? 'forage';
     const stages = MISSIONS[mission]?.stages;
@@ -618,7 +631,7 @@ export function createPlaygroundView(canvas) {
       for (const s of game.sugars) drawSugar(s);
     } else {
       const need = stages?.[game.pipeline];
-      for (const s of game.sugars) drawToken(s, need);
+      for (const s of game.sugars) (s.kind ? drawToken(s, need) : drawSugar(s));
     }
     drawSensoryRays(game);
     for (const p of game.predators) drawSpider(p);

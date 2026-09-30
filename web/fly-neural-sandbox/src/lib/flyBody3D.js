@@ -325,6 +325,9 @@ export class FlyBody3D {
     this.spiderLegMat = new THREE.MeshStandardMaterial({ color: 0x2b2826, roughness: 0.6 });
     this.spiderObjs = new Map();
     this.spiderGeo = spiderGeometry();
+    this.odorObjs = new Map();
+    this.odorGeom = new THREE.CircleGeometry(1, 48);
+    this.odorGeom.rotateX(-Math.PI / 2);
     this.rings = [];
     this.ringGeom = new THREE.RingGeometry(0.9, 1, 48);
     this.ringGeom.rotateX(-Math.PI / 2);
@@ -460,6 +463,7 @@ export class FlyBody3D {
     }
 
     this.syncSugar(game);
+    this.syncOdors(game);
     this.syncSpiders(game);
     this.syncTrail(game);
     for (let i = this.rings.length - 1; i >= 0; i--) {
@@ -532,6 +536,49 @@ export class FlyBody3D {
     for (const [s, o] of this.sugarObjs) if (!seen.has(s)) this.removeSugar(s, o);
   }
 
+  /** Sandbox odour sources: a soft scent cloud on the floor with a label. */
+  syncOdors(game) {
+    const seen = new Set();
+    for (const o of game.odorSources ?? []) {
+      seen.add(o);
+      let g = this.odorObjs.get(o);
+      if (!g) {
+        const color = o.odor === 'A' ? 0xf5a524 : 0x38bdf8;
+        g = new THREE.Group();
+        for (const [r, op] of [
+          [3.2, 0.1],
+          [2, 0.14],
+          [0.9, 0.3],
+        ]) {
+          const m = new THREE.Mesh(this.odorGeom, new THREE.MeshBasicMaterial({ color, transparent: true, opacity: op, depthWrite: false }));
+          m.scale.setScalar(r);
+          m.position.y = 0.015;
+          g.add(m);
+        }
+        const label = makeLabel(`Odour ${o.odor}`, false, 0.45);
+        label.position.y = 1.2;
+        g.add(label);
+        toScene(o.x, o.y, g.position);
+        this.scene.add(g);
+        this.odorObjs.set(o, g);
+      }
+      const pulse = 1 + 0.06 * Math.sin(this.time * 2.2 + o.x);
+      g.children[0].scale.setScalar(3.2 * pulse);
+    }
+    for (const [o, g] of this.odorObjs) {
+      if (!seen.has(o)) {
+        this.scene.remove(g);
+        g.traverse((c) => {
+          if (c.material) {
+            c.material.map?.dispose();
+            c.material.dispose();
+          }
+        });
+        this.odorObjs.delete(o);
+      }
+    }
+  }
+
   removeSugar(s, o) {
     this.scene.remove(o.group);
     if (o.label) {
@@ -592,6 +639,7 @@ export class FlyBody3D {
     this.renderer.domElement.removeEventListener('pointerup', this.onPointerUp);
     this.controls.dispose();
     for (const geo of Object.values(this.spiderGeo)) geo.dispose();
+    this.odorGeom.dispose();
     this.ringGeom.dispose();
     this.scene.traverse((o) => {
       if (o.geometry) o.geometry.dispose();

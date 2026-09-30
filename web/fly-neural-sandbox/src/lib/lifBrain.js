@@ -410,9 +410,12 @@ export class LIFBrain {
    * dopamine trace; KC->MBON synapses from Kenyon cells that fired in the last
    * `window` ms are then depressed in proportion. Pairing an odour with reward
    * therefore weakens that odour's KC->MBON synapses, a memory of it.
-   * @param {{kc:number[], mbon:number[], dan:number[]}} cells
+   * `dan` are reward dopamine neurons (PAM), `punish` punishment ones (PPL1):
+   * both depress the KC->MBON synapses of their own compartments, so a reward
+   * memory and a punishment memory live in different MBONs (see odorMemory).
+   * @param {{kc:number[], mbon:number[], dan:number[], punish?:number[]}} cells
    */
-  enablePlasticity({ kc, mbon, dan }, { rate = 0.1, window = 1000, floor = 0.15 } = {}) {
+  enablePlasticity({ kc, mbon, dan, punish = [] }, { rate = 0.1, window = 1000, floor = 0.15 } = {}) {
     const { offsets, post } = this.conn;
     const isKC = new Uint8Array(this.n);
     for (const i of kc) isKC[i] = 1;
@@ -420,11 +423,19 @@ export class LIFBrain {
     for (const i of mbon) isMBON[i] = 1;
     // KC->MBON edges grouped by MBON
     const byMbon = new Map(mbon.map((j) => [j, []]));
+    const byKc = new Map();
     for (const i of kc) {
-      for (let e = offsets[i]; e < offsets[i + 1]; e++) if (isMBON[post[e]]) byMbon.get(post[e]).push(e);
+      const mine = [];
+      for (let e = offsets[i]; e < offsets[i + 1]; e++) {
+        if (isMBON[post[e]]) {
+          byMbon.get(post[e]).push(e);
+          mine.push(e);
+        }
+      }
+      if (mine.length) byKc.set(i, mine);
     }
     // `enabled` gates learning to reward: dopamine counts while a reward (PAM stimulation) is on
-    this.plastic = { byMbon, rate, window, floor, original: new Map(), da: new Float32Array(this.n), changes: 0, enabled: false };
+    this.plastic = { byMbon, byKc, rate, window, floor, original: new Map(), da: new Float32Array(this.n), changes: 0, enabled: false };
     // total KC->MBON weight of each Kenyon cell, for the memory readout
     this.kcList = kc;
     for (const edges of byMbon.values()) for (const e of edges) this.plastic.original.set(e, this.wmv[e]);
@@ -435,7 +446,9 @@ export class LIFBrain {
     this.daOut = new Uint8Array(this.n);
     this.daTargets = new Map();
     let fastRemoved = 0;
-    for (const i of dan) {
+    const rewardMbons = new Set();
+    const punishMbons = new Set();
+    for (const i of [...dan, ...punish]) {
       const targets = [];
       for (let e = offsets[i]; e < offsets[i + 1]; e++) {
         if (isMBON[post[e]]) targets.push(post[e]);
@@ -445,8 +458,11 @@ export class LIFBrain {
       if (targets.length) {
         this.daOut[i] = 1;
         this.daTargets.set(i, targets);
+        for (const j of targets) (dan.includes(i) ? rewardMbons : punishMbons).add(j);
       }
     }
+    this.plastic.rewardMbons = rewardMbons;
+    this.plastic.punishMbons = punishMbons;
     return { plasticSynapses: this.plastic.original.size, dans: this.daTargets.size, fastRemoved };
   }
 
@@ -502,6 +518,43 @@ export class LIFBrain {
     let d = 0;
     for (const edges of p.byMbon.values()) for (const e of edges) d += kcSpikes[kcOf.get(e)] * this.wmv[e];
     return d;
+  }
+
+  /**
+   * What the mushroom body has learned about an odour, read from the synapses:
+   * the relative strength of the KC->MBON synapses of that odour's Kenyon cells
+   * onto the reward-compartment MBONs (weakened by PAM dopamine) and onto the
+   * punishment-compartment MBONs (weakened by PPL1 dopamine).
+   * valence > 0: rewarded (approach), < 0: punished (avoid).
+   * @param {Iterable<number>} kcs  the odour's Kenyon cells
+   */
+  odorMemory(kcs) {
+    const p = this.plastic;
+    if (!p) return { valence: 0, reward: 1, punish: 1 };
+    const { post } = this.conn;
+    let rs = 0;
+    let rn = 0;
+    let ps = 0;
+    let pn = 0;
+    for (const k of kcs) {
+      for (const e of p.byKc.get(k) ?? []) {
+        const w0 = p.original.get(e);
+        if (!w0) continue;
+        const ratio = this.wmv[e] / w0;
+        const j = post[e];
+        if (p.rewardMbons.has(j)) {
+          rs += ratio;
+          rn++;
+        }
+        if (p.punishMbons.has(j)) {
+          ps += ratio;
+          pn++;
+        }
+      }
+    }
+    const reward = rn ? rs / rn : 1;
+    const punish = pn ? ps / pn : 1;
+    return { valence: punish - reward, reward, punish };
   }
 
   /** Mean relative strength of the plastic synapses (1 = untrained). */

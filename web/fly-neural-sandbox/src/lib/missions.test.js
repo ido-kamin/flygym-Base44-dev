@@ -42,7 +42,30 @@ describe('missions', () => {
     expect(titles).toEqual(expect.arrayContaining(['Drosophila', 'Connectome']));
     const read = eatNow(g, 'Drosophila', { result: { title: 'Drosophila', url: 'u1', query: 'fruit fly' } });
     expect(read.find((e) => e.type === 'read').result.url).toBe('u1');
-    expect(Object.keys(MISSIONS)).toEqual(['forage', 'build', 'search', 'vibe']);
+    expect(Object.keys(MISSIONS)).toEqual(['forage', 'build', 'search', 'vibe', 'sandbox']);
+  });
+
+  it('sandbox: the fly cannot starve, odour sources reach each antenna, learned valence turns it', () => {
+    const g = new Game({ seed: 4 });
+    g.setMission('sandbox');
+    g.motorMode = 'neurons';
+    g.energy = 1;
+    g.step(1 / 120);
+    expect(g.over).toBe(false);
+    expect(g.energy).toBeGreaterThanOrEqual(40);
+    g.fly.theta = 0;
+    // odour A ahead and to the fly's right (+y is its right when heading +x)
+    expect(g.addOdor(g.fly.x + 80, g.fly.y + 60, 'A')).toBe(true);
+    g.sense();
+    expect(g.sensors.odorAR).toBeGreaterThan(g.sensors.odorAL);
+    expect(g.sensors.odorBL + g.sensors.odorBR).toBe(0);
+    // rewarded A: turn toward it (right, +); punished A: away (left, -)
+    expect(g.memoryTurn({ A: { valence: 0.5 } })).toBeGreaterThan(0.05);
+    expect(g.memoryTurn({ A: { valence: -0.5 } })).toBeLessThan(-0.05);
+    expect(g.memoryTurn({ B: { valence: 0.5 } })).toBe(0);
+    // leaving the sandbox clears its odours
+    g.setMission('forage');
+    expect(g.odorSources).toHaveLength(0);
   });
 });
 

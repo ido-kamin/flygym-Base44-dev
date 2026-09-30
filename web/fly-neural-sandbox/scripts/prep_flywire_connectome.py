@@ -282,7 +282,12 @@ def main() -> int:
             "all": idx((m["super_class"] == "motor").values)
         },  # brain motor neurons (proboscis, pharynx...)
         # mushroom body: learning
-        "dopamine": {"all": idx(ct.str.startswith("PAM").values)},
+        "dopamine": {
+            "all": idx(ct.str.startswith("PAM").values)
+        },  # reward dopamine neurons
+        "punish": {
+            "all": idx(ct.str.startswith("PPL1").values)
+        },  # punishment dopamine neurons
         "kc": {"all": idx((cc == "Kenyon_Cell").values)},
         "mbon": {"all": idx((cc == "MBON").values)},
     }

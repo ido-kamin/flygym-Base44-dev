@@ -49,7 +49,12 @@ export const MISSIONS = {
   build: { stages: BUILD_TASKS, doneEvent: 'shipped' },
   search: { stages: null, doneEvent: null, search: true },
   vibe: { stages: PIPELINE, doneEvent: 'deployed' },
+  // free play: the fly can't starve; the player drops sugar, spiders and odour sources
+  sandbox: { stages: null, doneEvent: null, sandbox: true },
 };
+/** Odour sources the player can drop in the sandbox (each is one glomerulus, see brainSession ODOR_INFO). */
+export const ODOR_KINDS = ['A', 'B'];
+const ODOR_SOURCE_MAX = 6;
 export const SEARCH_TOKEN = 'Search';
 
 /** Which cluster activity marks each gene's pathway as "in use" (training credit). */
@@ -102,7 +107,22 @@ export class Game {
     this.network = new Connectome();
     this.input = new Float32Array(CLUSTER_COUNT);
     this.events = [];
-    this.sensors = { odorL: 0, odorR: 0, loomL: 0, loomR: 0, threatL: 0, threatR: 0, wallL: 0, wallR: 0, taste: 0 };
+    this.sensors = {
+      odorL: 0,
+      odorR: 0,
+      loomL: 0,
+      loomR: 0,
+      threatL: 0,
+      threatR: 0,
+      wallL: 0,
+      wallR: 0,
+      taste: 0,
+      odorAL: 0,
+      odorAR: 0,
+      odorBL: 0,
+      odorBR: 0,
+    };
+    this.odorSources = [];
     /**
      * Optional motor command from the real brain, set by the caller each frame:
      * {turn -1..1, escape, escapeSide, feed, groom}. null = connectome model only.
@@ -209,6 +229,15 @@ export class Game {
     this.predators.length = 0;
   }
 
+  /** Drop an odour source (sandbox). */
+  addOdor(x, y, odor) {
+    if (!ODOR_KINDS.includes(odor)) return false;
+    if (this.odorSources.length >= ODOR_SOURCE_MAX) this.odorSources.shift();
+    this.odorSources.push({ x, y, odor, age: 0 });
+    this.events.push({ type: 'odor', x, y, odor });
+    return true;
+  }
+
   addSugar(x, y) {
     if (this.sugars.length >= SUGAR_MAX) return false;
     this.sugars.push({ x, y, phase: this.rng() * TAU, age: 0, kind: this.nextKind() });
@@ -247,10 +276,12 @@ export class Game {
     this.sugars = [];
     const initial = MISSIONS[mission].search ? 1 : this.foodTarget();
     for (let i = 0; i < initial; i++) this.spawnSugar();
+    if (!MISSIONS[mission].sandbox) this.odorSources = [];
     this.events.push({ type: 'mission', mission });
   }
 
   foodTarget() {
+    if (MISSIONS[this.mission]?.sandbox) return 4; // the player adds more
     return MISSIONS[this.mission]?.search ? 7 : SUGAR_TARGET;
   }
 
@@ -315,6 +346,9 @@ export class Game {
       // FlyWire descending neurons only: no brain connected = the fly stands still
       turnCmd = bm ? bm.turn : 0;
       vTarget = bm ? MAX_SPEED * bm.walk : 0;
+      // learned odours: the mushroom body's memory (valence, read from its KC->MBON synapses)
+      // turns the fly toward a rewarded odour and away from a punished one
+      if (bm?.memory) turnCmd += this.memoryTurn(bm.memory);
       // proboscis on sugar and the feeding motor neurons firing: feeding arrests walking
       if (bm?.feed && s.taste > 0) {
         turnCmd = 0;
@@ -358,6 +392,7 @@ export class Game {
     const vn = fly.v / MAX_SPEED;
     // neurons mode: a gentler metabolism (a live fly lasts minutes, not seconds, between meals)
     this.energy -= h * (neurons ? 0.3 + 0.5 * vn * vn : 0.9 + 2.2 * vn * vn * (0.5 + norm(w[G.speed])));
+    if (MISSIONS[this.mission]?.sandbox) this.energy = Math.max(this.energy, 40); // can't starve in the sandbox
     if (this.energy <= 0) {
       this.energy = 0;
       this.over = true;
@@ -370,6 +405,20 @@ export class Game {
       this.trail.push({ x: fly.x, y: fly.y });
       if (this.trail.length > TRAIL_LENGTH) this.trail.shift();
     }
+  }
+
+  /** Turn command from learned odour valence: toward the side that smells more of a rewarded odour. */
+  memoryTurn(memory) {
+    const s = this.sensors;
+    let t = 0;
+    for (const o of ODOR_KINDS) {
+      const v = memory[o]?.valence ?? 0;
+      const l = s[`odor${o}L`];
+      const r = s[`odor${o}R`];
+      if (!v || l + r < 0.02) continue;
+      t += 1.6 * v * ((r - l) / (l + r + 0.05)) * Math.min(1, (l + r) * 3);
+    }
+    return Math.max(-0.8, Math.min(0.8, t));
   }
 
   /**
@@ -457,6 +506,20 @@ export class Game {
     }
     // antennal lobes: divisive normalization (contrast) on top of a
     // log-compressed common signal, like projection neurons after lateral inhibition
+    // odour sources: each odour reaches each antenna separately (cosine-tuned, like the sugar scent)
+    const src = { AL: 0, AR: 0, BL: 0, BR: 0 };
+    for (const o of this.odorSources) {
+      const dx = o.x - fly.x;
+      const dy = o.y - fly.y;
+      const phi = wrapAngle(Math.atan2(dy, dx) - fly.theta);
+      const intensity = Math.exp(-Math.hypot(dx, dy) / 160);
+      src[`${o.odor}L`] += intensity * (0.5 + 0.5 * Math.cos(phi + ANTENNA_SPREAD));
+      src[`${o.odor}R`] += intensity * (0.5 + 0.5 * Math.cos(phi - ANTENNA_SPREAD));
+    }
+    this.sensors.odorAL = Math.min(1, src.AL);
+    this.sensors.odorAR = Math.min(1, src.AR);
+    this.sensors.odorBL = Math.min(1, src.BL);
+    this.sensors.odorBR = Math.min(1, src.BR);
     const total = odorL + odorR;
     const common = 0.25 * Math.log1p(3 * total);
     const contrast = (odorL - odorR) / (total + 0.08);

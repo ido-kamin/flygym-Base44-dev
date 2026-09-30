@@ -80,6 +80,15 @@ export function questFor(mission, { pipeline = 0, reads = 0, eaten = 0, deployme
         reward: `${XP.deployed} XP`,
         completed: deployments,
       };
+    case 'sandbox':
+      return {
+        title: 'Play with its brain',
+        steps: null,
+        done: Math.min(eaten, 10),
+        total: 10,
+        hint: 'It can’t starve here. Drop sugar, spiders and odours; stimulate, silence and teach its neurons in the Sandbox tab.',
+        reward: 'no score, just science',
+      };
     default:
       return {
         title: 'Feed your fly',
@@ -97,4 +106,5 @@ export const MISSION_META = {
   build: { label: 'Build on Base44', icon: '🛠', url: 'fly://base44.app/builder', tab: 'Base44 builder', color: '#e879f9' },
   search: { label: 'Search the web', icon: '🔎', url: 'fly://search', tab: 'Search', color: '#22d3ee' },
   vibe: { label: 'Vibecode · Base', icon: '⌨', url: 'fly://base.org/deploy', tab: 'FlyCoin.sol', color: '#3b7bff' },
+  sandbox: { label: 'Sandbox', icon: '🧪', url: 'fly://lab', tab: 'Brain sandbox', color: '#f5a524' },
 };
