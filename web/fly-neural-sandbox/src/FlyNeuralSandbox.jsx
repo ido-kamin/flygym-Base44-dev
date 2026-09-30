@@ -17,6 +17,10 @@ import DnaPanel from './components/DnaPanel.jsx';
 import { FlyCodeTerminal, FlyStatus } from './components/FlyCodeTerminal.jsx';
 import HatchScreen from './components/HatchScreen.jsx';
 import LabDrawer from './components/LabDrawer.jsx';
+import LearningPanel from './components/LearningPanel.jsx';
+import NeuralControls from './components/NeuralControls.jsx';
+import ProofPanel from './components/ProofPanel.jsx';
+import SidePanel from './components/SidePanel.jsx';
 import MissionStage from './components/MissionStage.jsx';
 import { GameOverOverlay, Toast } from './components/Overlays.jsx';
 import ShipModal from './components/ShipModal.jsx';
@@ -38,7 +42,7 @@ import { BrainRenderer } from './lib/brainRenderer.js';
 import { C } from './lib/connectome.js';
 import { createPlaygroundView } from './lib/drawPlayground.js';
 import { FlyTerminal, statusFor } from './lib/flycode.js';
-import { FlyBody3D } from './lib/flyBody3D.js';
+import { FlyBody3D, MM_PER_UNIT } from './lib/flyBody3D.js';
 import { Game, MAX_SPEED, MAX_TURN, MISSIONS, PREDATOR_MAX } from './lib/game.js';
 import { GENES, mulberry32, personality } from './lib/genome.js';
 import { loadNeuroMechFly } from './lib/neuromechfly.js';
@@ -56,6 +60,9 @@ const TRAIN_COOLDOWN_MS = 450;
 const VNC_CLUSTERS = [C.T1, C.T2, C.T3];
 const SENSE_INTERVAL = 0.05; // s, senses -> real brain at 20 Hz
 const REAL_HZ_FULL = 12; // a region's mean rate (Hz) shown as fully active
+const STEER_HZ = 80; // DNa02 stimulation while a steer control is held
+const REWARD_MS = 400; // PAM dopamine pulse
+const EXPERIMENT_TIMEOUT_MS = 20000;
 
 function hashParams(hash) {
   try {
@@ -152,6 +159,7 @@ function snapshot(game, engine) {
     changedGenes: engine.changedUntil > performance.now() ? engine.changedGenes : [],
     behaviour: game.behaviour,
     byBrain: Boolean(game.brainMotor),
+    motorMode: game.motorMode,
     holding: engine.holdUntil > performance.now(),
     pipeline: game.pipeline,
     deployments: game.deployments,
@@ -233,6 +241,12 @@ export default function FlyNeuralSandbox() {
   const [bodyStatus, setBodyStatus] = useState('loading');
   const [playback, setPlayback] = useState(1);
   const [real, setReal] = useState({ status: 'loading', progress: 0 });
+  const [motorMode, setMotorMode] = useState('neurons');
+  const [explore, setExplore] = useState(30);
+  const [lesions, setLesions] = useState({});
+  const [sideTab, setSideTab] = useState('proof');
+  const [experiments, setExperiments] = useState([]);
+  const [motor, setMotor] = useState(null);
   const [mission, setMissionState] = useState(() => readMission(window.location.hash) ?? 'build');
   const [profile, setProfile] = useState(() => {
     const p = loadProfile();
@@ -301,9 +315,11 @@ export default function FlyNeuralSandbox() {
       real: null,
       senseClock: 0,
       timeScale: 1,
+      experimentWaiters: [],
     };
     engineRef.current = engine;
     game.setMission(engine.mission);
+    game.motorMode = 'neurons';
     const dna0 = game.toDNA();
     engine.terminal.reset(dna0, unpackDNA(decodeBase44(dna0)));
 
@@ -340,25 +356,36 @@ export default function FlyNeuralSandbox() {
         if (!disposed) setBodyStatus('error');
       });
 
-    // the real FlyWire brain: 7.7 MB of connectome, simulated in a worker
+    // the real FlyWire brain: on the Base44 server (one per visitor), else in this browser
     let lastProgress = 0;
     engine.real = new RealBrain({
       baseUrl: import.meta.env.BASE_URL,
+      onTransport: (t) => {
+        if (!disposed) setReal((r) => ({ ...r, transport: t }));
+      },
       onProgress: (p) => {
         if (!disposed && p - lastProgress > 0.02) {
           lastProgress = p;
-          setReal({ status: 'loading', progress: p });
+          setReal((r) => ({ ...r, status: 'loading', progress: p }));
         }
       },
       onReady: (m) => {
         if (disposed) return;
-        brain.setConnectome(m.cluster);
-        setReal({ status: 'ready', progress: 1, n: m.n, nnz: m.nnz });
+        brain.setConnectome(m.cluster, m.positions);
+        setReal((r) => ({ ...r, status: 'ready', progress: 1, n: m.n, nnz: m.nnz, where: m.where, named: m.header?.named ?? [] }));
+        engine.real.control('walk', engine.explore ?? 30);
       },
-      onFrame: (m) => brain.setSpikes(m.activity),
+      onFrame: (m, activity) => {
+        if (activity) brain.setSpikes(activity);
+      },
+      onExperiment: (m) => {
+        if (disposed) return;
+        setExperiments((list) => [...list, m].slice(-40));
+        engine.experimentWaiters.shift()?.(m);
+      },
       onError: (err) => {
         console.warn('FlyWire connectome unavailable, using the 16-region model', err);
-        if (!disposed) setReal({ status: 'error', progress: 0 });
+        if (!disposed) setReal((r) => ({ ...r, status: 'error', progress: 0 }));
       },
     });
 
@@ -489,7 +516,19 @@ export default function FlyNeuralSandbox() {
       if (realClock >= 0.25 && rb?.frame) {
         realClock = 0;
         const f = rb.frame;
-        setReal((r) => (r.status === 'ready' ? { ...r, stats: f.stats, groups: f.groups } : r));
+        setReal((r) =>
+          r.status === 'ready'
+            ? { ...r, stats: f.stats, groups: f.groups, where: f.where && r.where ? { ...r.where, ...f.where } : r.where }
+            : r,
+        );
+        // the body's motion, to show next to the neurons that caused it
+        setMotor({
+          speedMm: game.fly.v * MM_PER_UNIT,
+          turnRate: game.fly.omega,
+          turnCmd: game.brainMotor?.turn ?? 0,
+          escaping: game.fly.escapeTimer > 0,
+          mode: game.motorMode,
+        });
       }
       if (hudClock >= HUD_INTERVAL) {
         hudClock = 0;
@@ -696,6 +735,65 @@ export default function FlyNeuralSandbox() {
 
   const pick = useCallback((x, y) => engineRef.current?.brain.pick(x, y) ?? null, []);
 
+  // ---- neural controls ----
+  const onMotorMode = useCallback(
+    (m) => {
+      setMotorMode(m);
+      const e = engineRef.current;
+      if (e) e.game.motorMode = m;
+      showToast(m === 'neurons' ? 'Neurons only: every movement now comes from FlyWire descending neurons' : 'Autopilot: the genome model steers, the FlyWire brain still fires escapes and feeding', 'info');
+    },
+    [showToast],
+  );
+  const onExplore = useCallback((hz) => {
+    setExplore(hz);
+    const e = engineRef.current;
+    if (!e) return;
+    e.explore = hz;
+    e.real?.control('walk', hz);
+  }, []);
+  const onSteer = useCallback((sideKey, on) => {
+    const e = engineRef.current;
+    if (!e?.real) return;
+    const name = sideKey === 'L' ? 'steerL' : 'steerR';
+    if ((e.real.controls[name] ?? 0) === (on ? STEER_HZ : 0)) return;
+    e.real.control(name, on ? STEER_HZ : 0);
+  }, []);
+  const onReward = useCallback(() => {
+    const e = engineRef.current;
+    if (!e?.real) return;
+    e.real.control('reward', 80);
+    setTimeout(() => e.real?.control('reward', 0), REWARD_MS);
+    showToast('Dopamine: PAM neurons fire for 0.4 s — whatever the fly smells now is being learned', 'ok');
+  }, [showToast]);
+  const onLesion = useCallback((name, on) => {
+    setLesions((l) => ({ ...l, [name]: on }));
+    engineRef.current?.real?.lesion(name, on);
+  }, []);
+  const onExperiment = useCallback(
+    (action, odor) =>
+      new Promise((resolve) => {
+        const e = engineRef.current;
+        if (!e?.real?.ready) return resolve(null);
+        const t = setTimeout(() => resolve(null), EXPERIMENT_TIMEOUT_MS);
+        e.experimentWaiters.push((m) => {
+          clearTimeout(t);
+          resolve(m);
+        });
+        e.real.experiment(action, odor);
+      }),
+    [],
+  );
+  const onSelfTest = useCallback(async () => {
+    const r = await fetch(new URL('api/brain/selftest', document.baseURI));
+    if (!r.ok) throw new Error(r.status === 404 ? 'No server brain here (static hosting)' : `self-test failed: HTTP ${r.status}`);
+    return r.json();
+  }, []);
+  const getRaster = useCallback(() => {
+    const rb = engineRef.current?.real;
+    return rb?.frame ? { raster: rb.raster, simMs: rb.frame.stats.simMs } : null;
+  }, []);
+
   useEffect(() => {
     const e = engineRef.current;
     if (!e) return;
@@ -711,6 +809,10 @@ export default function FlyNeuralSandbox() {
       const typing = t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement || t instanceof HTMLSelectElement || t?.isContentEditable;
       if (ev.metaKey || ev.ctrlKey || ev.altKey || typing) return;
       const k = ev.key.toLowerCase();
+      if (k === 'a' || k === 'arrowleft') return onSteer('L', true);
+      if (k === 'd' || k === 'arrowright') return onSteer('R', true);
+      if (k === 'e') return onReward();
+      if (ev.repeat) return;
       if (k === 'm') onMutate();
       else if (k === 'p') onTogglePredator();
       else if (k === 'r') onRestart();
@@ -723,9 +825,18 @@ export default function FlyNeuralSandbox() {
         setLabOpen(false);
       }
     };
+    const onKeyUp = (ev) => {
+      const k = ev.key.toLowerCase();
+      if (k === 'a' || k === 'arrowleft') onSteer('L', false);
+      if (k === 'd' || k === 'arrowright') onSteer('R', false);
+    };
     window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [onMutate, onRestart, onTogglePredator, onGood, onBad, onMission]);
+    window.addEventListener('keyup', onKeyUp);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('keyup', onKeyUp);
+    };
+  }, [onMutate, onRestart, onTogglePredator, onGood, onBad, onMission, onSteer, onReward]);
 
   const share = hud && engineRef.current ? shareUrl(engineRef.current, hud.dna) : '';
 
@@ -753,6 +864,7 @@ export default function FlyNeuralSandbox() {
               onPlayback={setPlayback}
               behaviour={hud?.behaviour}
               byBrain={hud?.byBrain}
+              motorMode={hud?.motorMode}
               armed={armed}
             />
             {hud?.over && <GameOverOverlay hud={hud} onRestart={onRestart} onMutateRetry={onMutateRetry} onCopy={onCopy} />}
@@ -769,29 +881,51 @@ export default function FlyNeuralSandbox() {
               onMutate={onMutate}
               onRestart={onRestart}
               onShip={() => setShipOpen(true)}
-            />
+            >
+              <NeuralControls
+                mode={motorMode}
+                onMode={onMotorMode}
+                explore={explore}
+                onExplore={onExplore}
+                onSteer={onSteer}
+                onReward={onReward}
+                lesions={lesions}
+                onLesion={onLesion}
+                ready={real.status === 'ready'}
+              />
+            </BottomDock>
           )}
         </div>
 
-        <aside className="grid min-h-0 gap-2 lg:grid-rows-[minmax(0,1.15fr)_minmax(0,1fr)]">
+        <aside className="grid min-h-0 gap-2 lg:grid-rows-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
           <BrainView ref={brainHostRef} activity={hud?.activity ?? []} pick={pick} holding={hud?.holding} real={real} />
-          <MissionStage
-            ref={canvasRef}
-            mission={mission}
-            hud={hud ?? { dna: '' }}
-            searchQuery={searchQuery}
-            armed={armed}
-            onPointerDown={onPlaygroundDown}
-            onPointerMove={onPlaygroundMove}
-            onPointerLeave={onPlaygroundLeave}
-          >
-            {hud && (
-              <>
-                <FlyStatus status={hud.status} />
-                <FlyCodeTerminal dna={hud.dna} weights={hud.weights} lines={hud.terminal} mission={mission} />
-              </>
-            )}
-          </MissionStage>
+          <SidePanel
+            tab={sideTab}
+            onTab={setSideTab}
+            panes={{
+              proof: <ProofPanel real={real} getRaster={getRaster} motor={motor} onSelfTest={onSelfTest} />,
+              learn: <LearningPanel results={experiments} onExperiment={onExperiment} ready={real.status === 'ready'} stats={real.stats} />,
+              map: (
+                <MissionStage
+                  ref={canvasRef}
+                  mission={mission}
+                  hud={hud ?? { dna: '' }}
+                  searchQuery={searchQuery}
+                  armed={armed}
+                  onPointerDown={onPlaygroundDown}
+                  onPointerMove={onPlaygroundMove}
+                  onPointerLeave={onPlaygroundLeave}
+                >
+                  {hud && (
+                    <>
+                      <FlyStatus status={hud.status} />
+                      <FlyCodeTerminal dna={hud.dna} weights={hud.weights} lines={hud.terminal} mission={mission} />
+                    </>
+                  )}
+                </MissionStage>
+              ),
+            }}
+          />
         </aside>
       </main>
 

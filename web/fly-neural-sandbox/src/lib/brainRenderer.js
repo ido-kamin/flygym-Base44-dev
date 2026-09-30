@@ -164,25 +164,78 @@ export class BrainRenderer {
   }
 
   /**
-   * Bind the real connectome: every brain point stands for one FlyWire neuron
-   * of the same region (points and neurons of a region are matched in order;
-   * where a region has more points than neurons, neurons repeat). VNC points
-   * keep the model's activity (FlyWire is the brain only).
-   * @param {Uint8Array} neuronCluster  cluster of each connectome neuron
+   * Bind the real connectome. With positions, the first brain points move to
+   * the real soma positions of the FlyWire neurons (point i = neuron i); the few
+   * extra points double up on neurons. Without positions, points and neurons of
+   * a region are matched in order. VNC points keep the model's activity
+   * (FlyWire is the brain only).
+   * @param {Uint8Array} neuronCluster  region of each connectome neuron
+   * @param {Float32Array|null} [positions]  xyz (nm) of each neuron
+   * @param {Uint8Array|null} [neuronSide]  unused; the side is inferred from the regions
    */
-  setConnectome(neuronCluster) {
-    const byCluster = Array.from({ length: CLUSTER_COUNT }, () => []);
-    neuronCluster.forEach((c, i) => byCluster[c]?.push(i));
+  setConnectome(neuronCluster, positions = null) {
     const count = this.brain.count;
+    const nb = this.brain.brainCount;
+    const n = neuronCluster.length;
     const map = new Int32Array(count).fill(-1);
-    const seen = new Int32Array(CLUSTER_COUNT);
-    const points = new Int32Array(CLUSTER_COUNT);
-    const cl = this.brain.cluster;
-    for (let i = 0; i < count; i++) points[cl[i]]++;
-    for (let i = 0; i < count; i++) {
-      const c = cl[i];
-      const list = byCluster[c];
-      if (list.length) map[i] = list[Math.floor((seen[c]++ * list.length) / points[c])];
+    if (positions) {
+      const pos = this.points.geometry.attributes.position;
+      const cl = this.points.geometry.attributes.aCluster;
+      // FlyWire nm -> scene units: same width as the procedural brain, dorsal up, centred on the brain's region
+      let lo = [Infinity, Infinity, Infinity];
+      let hi = [-Infinity, -Infinity, -Infinity];
+      for (let i = 0; i < n; i++) {
+        for (let a = 0; a < 3; a++) {
+          const v = positions[i * 3 + a];
+          if (v < lo[a]) lo[a] = v;
+          if (v > hi[a]) hi[a] = v;
+        }
+      }
+      const c = [(lo[0] + hi[0]) / 2, (lo[1] + hi[1]) / 2, (lo[2] + hi[2]) / 2];
+      const k = 10.6 / (hi[0] - lo[0]);
+      // which way is the fly's left in FlyWire x: the optic lobe labelled left
+      let sumL = 0;
+      let cntL = 0;
+      for (let i = 0; i < n; i++) {
+        if (neuronCluster[i] === C.OL_L) {
+          sumL += positions[i * 3];
+          cntL++;
+        }
+      }
+      const flip = cntL && sumL / cntL > c[0] ? -1 : 1;
+      const sum = Array.from({ length: CLUSTER_COUNT }, () => [0, 0, 0, 0]);
+      for (let i = 0; i < nb; i++) {
+        const j = i < n ? i : i % n;
+        map[i] = j;
+        const x = flip * (positions[j * 3] - c[0]) * k;
+        const y = 3.1 - (positions[j * 3 + 1] - c[1]) * k;
+        const z = -(positions[j * 3 + 2] - c[2]) * k;
+        pos.setXYZ(i, x, y, z);
+        cl.setX(i, neuronCluster[j]);
+        const acc = sum[neuronCluster[j]];
+        acc[0] += x;
+        acc[1] += y;
+        acc[2] += z;
+        acc[3]++;
+      }
+      pos.needsUpdate = true;
+      cl.needsUpdate = true;
+      this.points.geometry.computeBoundingSphere();
+      // wave fronts and hover labels start from the real regions' centroids
+      this.anchors = CLUSTERS.map((cc, i) => (sum[i][3] ? [sum[i][0] / sum[i][3], sum[i][1] / sum[i][3], sum[i][2] / sum[i][3]] : cc.anchor));
+      this.realPositions = true;
+    } else {
+      const byCluster = Array.from({ length: CLUSTER_COUNT }, () => []);
+      neuronCluster.forEach((c, i) => byCluster[c]?.push(i));
+      const seen = new Int32Array(CLUSTER_COUNT);
+      const points = new Int32Array(CLUSTER_COUNT);
+      const cl = this.brain.cluster;
+      for (let i = 0; i < count; i++) points[cl[i]]++;
+      for (let i = 0; i < count; i++) {
+        const c = cl[i];
+        const list = byCluster[c];
+        if (list.length) map[i] = list[Math.floor((seen[c]++ * list.length) / points[c])];
+      }
     }
     this.pointNeuron = map;
     this.realTarget = 1;
@@ -208,7 +261,7 @@ export class BrainRenderer {
   launchWave({ cluster, color, strength }) {
     const i = this.waveCursor;
     this.waveCursor = (this.waveCursor + 1) % MAX_WAVES;
-    const a = CLUSTERS[cluster].anchor;
+    const a = this.anchors?.[cluster] ?? CLUSTERS[cluster].anchor;
     this.neuronUniforms.uWave.value[i].set(a[0], a[1], a[2], this.time);
     this.neuronUniforms.uWaveColor.value[i].set(color[0], color[1], color[2], strength);
   }
@@ -318,7 +371,8 @@ export class BrainRenderer {
 
     const real = this.neuronUniforms.uReal;
     real.value += ((this.realTarget ?? 0) - real.value) * Math.min(1, dt * 1.5);
-    this.tractUniforms.uDim.value = 1 - 0.65 * real.value;
+    // the model's tracts are drawn on the procedural anatomy: hide them over real neuron positions
+    this.tractUniforms.uDim.value = 1 - (this.realPositions ? 1 : 0.65) * real.value;
     this.neuronUniforms.uTime.value = this.time;
     this.tractUniforms.uTime.value = this.time;
     this.controls.update(dt);
@@ -348,7 +402,7 @@ export class BrainRenderer {
     let best = null;
     let bestD = radius;
     CLUSTERS.forEach((c, i) => {
-      v.set(...c.anchor).project(this.camera);
+      v.set(...(this.anchors?.[i] ?? c.anchor)).project(this.camera);
       if (v.z > 1) return;
       const x = rect.left + ((v.x + 1) / 2) * rect.width;
       const y = rect.top + ((1 - v.y) / 2) * rect.height;

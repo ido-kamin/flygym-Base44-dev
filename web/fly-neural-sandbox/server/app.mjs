@@ -2,6 +2,9 @@
 //
 //   GET  /api/health          liveness + which features are configured
 //   GET  /api/search?q=...     the fly's web search (Wikipedia, proxied + cached)
+//   ws   /api/brain            the fly's FlyWire brain, simulated on this server (brainHost.mjs)
+//   GET  /api/brain/info       where the brains run (host, CPUs, sessions)
+//   GET  /api/brain/selftest   run the published circuits here and report the neurons' responses
 //   POST /api/fly-apps         the fly ships a REAL Base44 app from its DNA
 //   GET  /api/fly-apps/:id     build status -> deploy -> live URL
 //
@@ -99,11 +102,19 @@ const stripHtml = (s) =>
  * @param {object} opts
  * @param {string} opts.distDir     built game to serve
  * @param {string} [opts.publicDir] static data served directly (Vite's public/), preferred over its copy in dist/
+ * @param {ReturnType<import('./brainHost.mjs').createBrainHost>} [opts.brainHost]  FlyWire brains on this server (ws /api/brain)
  * @param {object} [opts.env]       process.env-like config
  * @param {typeof fetch} [opts.fetchImpl]
  * @param {() => number} [opts.now]
  */
-export function createFlyServer({ distDir, publicDir = null, env = process.env, fetchImpl = fetch, now = () => Date.now() } = {}) {
+export function createFlyServer({
+  distDir,
+  publicDir = null,
+  brainHost = null,
+  env = process.env,
+  fetchImpl = fetch,
+  now = () => Date.now(),
+} = {}) {
   const token = env.BASE44_API_TOKEN || '';
   const apiBase = (env.BASE44_API_URL || 'https://app.base44.com').replace(/\/$/, '');
   const dailyCap = Number(env.FLY_APPS_DAILY_CAP || 25);
@@ -114,6 +125,7 @@ export function createFlyServer({ distDir, publicDir = null, env = process.env, 
   const global = rateLimiter(4, 60_000, now); // stay under the Platform API's 5/min
   const searchLimit = rateLimiter(30, 60_000, now);
   const statusLimit = rateLimiter(60, 60_000, now); // app-status polls (each may call the Platform API)
+  const selfTestLimit = rateLimiter(6, 60_000, now);
   let day = new Date(now()).toISOString().slice(0, 10);
   let builtToday = 0;
   /** apps this server created: id -> {dna, name, createdAt, url?} (never proxy other ids) */
@@ -315,7 +327,16 @@ export function createFlyServer({ distDir, publicDir = null, env = process.env, 
     const url = new URL(req.url, 'http://local');
     try {
       if (url.pathname === '/api/health') {
-        return json(res, 200, { ok: true, realApps: Boolean(token), dailyCap, builtToday });
+        return json(res, 200, { ok: true, realApps: Boolean(token), dailyCap, builtToday, brain: brainHost?.info() ?? null });
+      }
+      if (url.pathname === '/api/brain/info' && req.method === 'GET') {
+        if (!brainHost) return json(res, 404, { error: 'no_brain_host' });
+        return json(res, 200, brainHost.info());
+      }
+      if (url.pathname === '/api/brain/selftest' && req.method === 'GET') {
+        if (!brainHost) return json(res, 404, { error: 'no_brain_host' });
+        if (!selfTestLimit(clientKey(req))) return json(res, 429, { error: 'rate_limited' });
+        return json(res, 200, await brainHost.selfTest());
       }
       if (url.pathname === '/api/search' && req.method === 'GET') return await search(req, res, url);
       if (url.pathname === '/api/fly-apps' && req.method === 'POST') return await createApp(req, res);

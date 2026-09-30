@@ -118,11 +118,15 @@ Positions are procedural, but every region's count comes from the published FlyW
 | **Brain total** | **139,255** | |
 | VNC | 22,300 | MANC; the split across neuromeres is approximate |
 
-## The real brain (FlyWire v783, LIF)
+## The real brain (FlyWire v783, LIF), running on Base44
 
-`public/connectome/flywire783.bin.gz` (7.7 MB) packs the FlyWire v783 connectome as used by Shiu et al. 2024: 138,639 neurons and the 2,700,513 connections of 5 or more synapses (FlyWire's standard threshold), with signed synapse counts (GABA/glutamate inhibitory). `scripts/prep_flywire_connectome.py` builds it from the model's `Completeness_783.csv` / `Connectivity_783.parquet` and the FlyWire annotation table, and records the neuron groups the game reads and writes.
+`public/connectome/flywire783.bin.gz` (8.5 MB) packs the FlyWire v783 connectome as used by Shiu et al. 2024: 138,639 neurons and 2.69M connections of 5 or more synapses (FlyWire's standard threshold) with signed synapse counts, every neuron's soma position, and 22 identified neurons (with their FlyWire root IDs) for the live raster. `scripts/prep_flywire_connectome.py` builds it from the model's `Completeness_783.csv` / `Connectivity_783.parquet` and the FlyWire annotation table.
 
-`src/lib/lifBrain.js` integrates the published leaky integrate-and-fire model (v0 −52 mV, threshold −45 mV, τm 20 ms, τsyn 5 ms, 2.2 ms refractory, 1.8 ms delay, 0.275 mV per synapse, Poisson inputs of 250 × w) with forward Euler at 1 ms, event-driven (only neurons with input or not yet at rest are updated). A unit test checks it against a dense integration of the same equations, and against the published circuits on the real data.
+`src/lib/lifBrain.js` integrates the published leaky integrate-and-fire model (v0 −52 mV, threshold −45 mV, τm 20 ms, τsyn 5 ms, 2.2 ms refractory, 1.8 ms delay, 0.275 mV per synapse, Poisson inputs of 250 × w) with forward Euler at 1 ms, event-driven (only neurons with input or not yet at rest are updated). A unit test checks it against a dense integration of the same equations.
+
+**Where it runs.** `server/brainHost.mjs` gives every visitor their own brain in a Node worker thread on the Base44 container (up to CPUs − 1 at once; the connectome is parsed once and shared), streamed over a WebSocket (`/api/brain`): the page sends senses and controls, the server sends spikes, rates, per-neuron activity and the descending-neuron readouts. When all slots are taken (or on static hosting) the same code (`src/lib/brainSession.js`) runs in a Web Worker in the browser, and the page says so.
+
+**Transmitter corrections.** The published model signs synapses by FlyWire's *predicted* transmitter. With those signs any smell or taste ignites a self-sustaining antennal-lobe / mushroom-body loop (≈ 480k spikes/s, with 60% of Kenyon cells firing; the same on the full, unthresholded graph). Three corrections from the annotation table fix it: experimentally known transmitters (`known_nt`) override predictions (80k neurons; e.g. photoreceptors are histaminergic), AL local neurons without a known transmitter are GABAergic (85), and the chemical synapses of cholinergic AL local neurons, which act mainly through gap junctions, are left out (46). Now an odour activates ~50–120 Kenyon cells (a sparse code, as in vivo), sugar drives the feeding motor neurons without ignition, and the brain returns to rest by itself.
 
 | The fly senses | Sensory neurons (Poisson drive) |
 |---|---|
@@ -134,14 +138,21 @@ Positions are procedural, but every region's count comes from the published FlyW
 
 | Descending / motor neurons | Behaviour |
 |---|---|
+| DNp09 (walk command) | forward walking, speed ∝ rate (60 Hz = full) |
+| DNa02 (+ DNa01) right − left | turning |
 | DNp01 (giant fiber) > 40 Hz | escape jump away from the leading side |
-| DNa02 (+ DNa01) left − right, high-passed | steering |
 | brain motor neurons > 5 Hz | keep feeding |
 | DNg11 / DNg12_a > 12 Hz | groom |
 
-Smell and taste run as trials that end by returning the network to rest, as the published model is run: in this model (no spike-frequency adaptation, no graded APL inhibition) the antennal-lobe / mushroom-body / lateral-horn loop keeps firing after a smell or taste ends, at about 480k spikes/s. The same happens with the full, unthresholded graph, so this comes from the model, not from dropping weak connections.
+**Neurons only (default).** The body moves only from those descending neurons: no genome model, no noise, no scripted instincts; without a brain the fly stands still. The player drives the neurons like an optogenetics experiment: *Explore* stimulates DNp09 (Bidaye et al. 2020), holding A / D stimulates DNa02 left / right (Rayshubskiy et al. 2020), *Reward* (E) pulses dopamine into the PAM neurons, and *Silence* lesions a group (giant fibers, steering, walk command, motor neurons, sugar neurons): silence DNp01 and the fly no longer escapes a spider. *Autopilot* adds the 16-region genome model's steering toward food and tasks for the missions.
 
-Speed: about real time at rest and with light or looming (1–4×), and 0.3× during a taste trial on a laptop CPU.
+**Learning.** Dopamine-gated plasticity at the Kenyon cell → MBON synapses of the mushroom body (Hige et al. 2015; Cohn et al. 2015): while PAM dopamine neurons fire, the KC→MBON synapses of Kenyon cells that fired in the same trial are depressed, in the compartments of the MBONs those DANs synapse onto (dopamine acts only through this rule, not as fast excitation). The *Learning* tab runs the classic experiment on the fly's own brain: odour A (glomerulus DM4) and B (VA2) are tested, A is paired with dopamine three times, and both are tested again. A's KC→MBON drive drops by ~40–50%, B's by under 10%.
+
+**Proof.** The *Is it real?* tab shows where the brain runs (host, CPUs, the share of a core this brain uses, spikes computed), the live chain from descending-neuron rates to the body's speed and turning, a spike raster of 22 identified neurons (links to FlyWire Codex by root ID), and a self-test (`GET /api/brain/selftest`) that runs the published circuits on fresh brains on the server: looming left / right (giant fibers, steering away), the DNp01 lesion, sugar → feeding, light → optic lobes, and the odour-specific learning, with the measured numbers.
+
+**3D.** Each brain point sits at its FlyWire neuron's real soma position and flashes when that neuron fires; the nerve cord below is procedural (MANC counts; FlyWire is the brain only).
+
+Speed: 1–4× real time at rest, with light, looming or an odour; ~1× during a taste trial; each brain uses ~70% of one CPU core.
 
 **Licence:** FlyWire connectome data is © the FlyWire Consortium, licensed **CC BY-NC 4.0** (non-commercial use, with attribution): Dorkenwald et al., *Nature* 2024; Schlegel et al., *Nature* 2024; FlyWire guidelines at https://flywire.ai. Model: Shiu et al., *Nature* 2024, code MIT (https://github.com/philshiu/Drosophila_brain_model). Hosting this app commercially needs FlyWire's permission.
 
@@ -185,7 +196,7 @@ It deploys `contracts/FlyCoin.sol` from the visitor's own wallet over EIP-1193 (
   - Spiders have gait and threat rings.
   - Antenna and eye sensory rays are drawn, and the fly's current DNA grid cell is highlighted.
 
-**Honesty note**: neuron *positions* are procedural. They are shapes placed where the real neuropils are, with FlyWire's per-region neuron counts, and they are not FlyWire morphology; each point is lit by a real FlyWire neuron of the same region. Behaviour mixes the real LIF brain (escape, steering, feeding, grooming) with the 16-region genome model (odour steering, speed, personality), because the LIF model has no forward-walking command (DNp09 stays silent) and no learning.
+**Honesty note**: brain points are at real FlyWire soma positions once the connectome loads (before that, and for the nerve cord, positions are procedural). In *Neurons only* mode all movement comes from the LIF brain's descending neurons; forward walking needs the Explore drive on DNp09, because nothing in the published model activates DNp09 on its own. Smell- and taste-guided steering are not in the model; *Autopilot* uses the 16-region genome model for that. The escape jump itself is a fixed motor program triggered by DNp01, as the giant fiber triggers take-off in real flies.
 
 ## Layout
 
@@ -198,9 +209,14 @@ src/
     genome.js            genes, mutation, personality, PRNG (pure)
     connectome.js        16-cluster network + motor readout (pure)
     game.js              deterministic world: fly, sugar, predators, energy, instincts (pure)
-    lifBrain.js          FlyWire whole-brain LIF model + connectome decoder (pure)
-    connectomeWorker.js  runs lifBrain in a Web Worker
-    realBrain.js         main-thread client: senses in, motor commands out
+    lifBrain.js          FlyWire whole-brain LIF model, lesions, raster, mushroom-body plasticity (pure)
+    brainSession.js      one running brain: senses, controls, trials, learning experiments, frames
+    selfTest.js          the published circuits as pass/fail checks
+    connectomeWorker.js  runs a BrainSession in a Web Worker (fallback)
+    realBrain.js         page client: server WebSocket or local worker; senses in, motor commands out
+server/
+    brainHost.mjs        one brain per visitor in worker threads on the server, ws /api/brain, self-test
+    brainWorker.mjs      the worker thread
     flyBody3D.js         NeuroMechFly 3D world: arena, sugar, spiders, chase camera
     brainGeometry.js     seeded procedural anatomy + tracts (pure)
     brainShaders.js      GLSL

@@ -1,4 +1,4 @@
-import { BRAIN_NEURONS, VNC_NEURONS } from '../lib/constants.js';
+import { VNC_NEURONS } from '../lib/constants.js';
 
 /**
  * Slide-over "Lab": everything technical lives here, off the main game screen:
@@ -47,16 +47,16 @@ export default function LabDrawer({ open, onClose, notes, children }) {
             steps; its speed, turning and posture were measured by walking the same model in MuJoCo physics.
           </p>
           <p className="mt-1.5">
-            The brain is the <b className="text-neutral-200">FlyWire v783 connectome</b>: 138,639 neurons and 2.7 million connections
-            (5+ synapses), simulated as a leaky integrate-and-fire network with the published parameters of Shiu et al. (2024) in a
-            Web Worker. Its photoreceptors see light, its looming detectors (LPLC2, LC4) see spiders, and sugar and odours are
-            given as short stimulus trials. Its descending neurons move the body: the giant fiber (DNp01) triggers the escape jump,
-            DNa02 steers, and brain motor neurons make it stop and feed.
+            The brain is the <b className="text-neutral-200">FlyWire v783 connectome</b>: 138,639 neurons and 2.7 million connections,
+            simulated as a leaky integrate-and-fire network (Shiu et al. 2024) on the Base44 server, one brain per visitor (or in your
+            browser when the server is full). Known transmitters from the FlyWire annotations replace predicted ones, which keeps odour
+            codes sparse. In Neurons-only mode the body moves only from its descending neurons: DNp09 walks, DNa02 steers, the giant
+            fiber DNp01 jumps, motor neurons feed. Learning is dopamine-gated plasticity at the mushroom body&apos;s Kenyon cell → MBON
+            synapses.
           </p>
           <p className="mt-1.5">
-            The 3D view shows {BRAIN_NEURONS.toLocaleString('en-US')} brain points (each lit by one FlyWire neuron of its region) and{' '}
-            {VNC_NEURONS.toLocaleString('en-US')} nerve-cord points (MANC); positions are procedural, not FlyWire morphology. The
-            personality genes run a 16-region model on top, and training uses dopamine-gated learning like the mushroom bodies.
+            Each point in the 3D brain is a FlyWire neuron at its real soma position, lit by its live firing; the nerve cord is procedural
+            ({VNC_NEURONS.toLocaleString('en-US')} points, MANC count). The personality genes run a 16-region model used by Autopilot.
           </p>
           <p className="mt-1.5">
             Connectome data: FlyWire Consortium (Dorkenwald et al. 2024, Schlegel et al. 2024), CC BY-NC 4.0 — non-commercial use.

@@ -138,6 +138,27 @@ describe('game', () => {
     expect(groomed).toBe(true);
   });
 
+  it('neurons mode: the fly only moves when its descending neurons say so', () => {
+    const g = new Game({ seed: 12 });
+    g.motorMode = 'neurons';
+    const x0 = g.fly.x;
+    const y0 = g.fly.y;
+    run(g, 1); // no brain connected: stands still
+    expect(Math.hypot(g.fly.x - x0, g.fly.y - y0)).toBeLessThan(1);
+    expect(g.behaviour).toBe('stand');
+    g.fly.theta = 0;
+    g.fly.x = 300;
+    g.fly.y = 320;
+    g.brainMotor = { turn: 0, walk: 0.5, escape: false, escapeSide: 1, feed: false, groom: false };
+    run(g, 0.5);
+    expect(g.fly.x).toBeGreaterThan(330); // DNp09 at half rate: walks forward
+    expect(Math.abs(g.fly.theta)).toBeLessThan(0.01); // no genome steering, no noise
+    g.brainMotor = { turn: -0.6, walk: 0.5, escape: false, escapeSide: 1, feed: false, groom: false };
+    run(g, 0.3);
+    expect(g.fly.theta).toBeLessThan(-0.2); // DNa02 left > right: turns left
+    expect(g.behaviour).toBe('explore');
+  });
+
   it(`caps predators at ${PREDATOR_MAX}`, () => {
     const g = new Game({ seed: 1 });
     for (let i = 0; i < PREDATOR_MAX; i++) expect(g.addPredator(50 + i * 40, 50)).toBe(true);

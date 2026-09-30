@@ -132,7 +132,7 @@ void main() {
   vAlpha = clamp(0.12 + fire * 0.3, 0.0, 0.5);
   // real mode: resting neurons are faint dust, firing ones stand out
   float realA = uReal * step(aCluster, 12.5);
-  vAlpha = mix(vAlpha, clamp(0.035 + min(aSpike, 1.0) * 0.55, 0.0, 0.6), realA);
+  vAlpha = mix(vAlpha, clamp(0.07 + min(aSpike, 1.0) * 0.55, 0.0, 0.6), realA);
 }
 `;
 

@@ -3,8 +3,8 @@ import { questFor } from '../lib/progress.js';
 const btn =
   'flex items-center justify-center gap-1.5 rounded-lg border px-3 py-2 text-xs font-medium transition active:scale-[0.97] disabled:cursor-not-allowed disabled:opacity-40';
 
-/** Quest progress, training buttons and abilities: the game's control deck. */
-export default function BottomDock({ hud, mission, stats, armed, onGood, onBad, onTogglePredator, onMutate, onRestart, onShip }) {
+/** Quest progress, the neural controls (children), genome training and abilities: the game's control deck. */
+export default function BottomDock({ hud, mission, stats, armed, onGood, onBad, onTogglePredator, onMutate, onRestart, onShip, children }) {
   const q = questFor(mission, { pipeline: hud.pipeline, deployments: hud.deployments, ...stats });
   const total = q.steps ? q.steps.length : q.total;
 
@@ -55,25 +55,17 @@ export default function BottomDock({ hud, mission, stats, armed, onGood, onBad, 
         )}
       </section>
 
-      <section className="rounded-xl border border-white/[0.07] bg-panel p-3">
-        <div className="flex items-baseline justify-between">
-          <h3 className="text-[13px] font-semibold text-white">Train your fly</h3>
-          <span className="font-mono text-[10px] text-neutral-500">{stats.trained} sessions</span>
-        </div>
-        <div className="mt-2 grid grid-cols-2 gap-2">
-          <button type="button" onClick={onGood} data-testid="train-good" className={`${btn} border-white/10 bg-white/[0.04] text-white hover:bg-white/[0.08]`} title="Reward (G)">
-            🍬 Good fly
+      {children}
+
+      <section className="grid grid-cols-3 gap-2 lg:w-36 lg:grid-cols-1">
+        <div className="col-span-3 grid grid-cols-2 gap-2 lg:col-span-1" title="Genome training (the 16-region personality model)">
+          <button type="button" onClick={onGood} data-testid="train-good" className={`${btn} border-white/10 bg-panel text-neutral-200 hover:bg-white/[0.06]`} title="Good fly (G): dopamine-gated genome training">
+            🍬 Good
           </button>
-          <button type="button" onClick={onBad} data-testid="train-bad" className={`${btn} border-white/10 bg-white/[0.04] text-white hover:bg-white/[0.08]`} title="Punish (B)">
+          <button type="button" onClick={onBad} data-testid="train-bad" className={`${btn} border-white/10 bg-panel text-neutral-200 hover:bg-white/[0.06]`} title="No (B)">
             ✋ No
           </button>
         </div>
-        <p className="mt-1.5 text-[11px] leading-snug text-neutral-500">
-          Dopamine strengthens whatever its brain was just doing. Train it and its DNA changes.
-        </p>
-      </section>
-
-      <section className="grid grid-cols-3 gap-2 lg:w-36 lg:grid-cols-1">
         <button
           type="button"
           onClick={onTogglePredator}

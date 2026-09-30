@@ -9,6 +9,10 @@ const CLASS_LABEL = {
 };
 
 const TRIAL_TEXT = {
+  testA: 'Learning test · smelling odour A',
+  testB: 'Learning test · smelling odour B',
+  trainA: 'Training · odour A + dopamine',
+  trainB: 'Training · odour B + dopamine',
   sugar: 'Tasting sugar · sugar GRNs at 200 Hz',
   smellL: 'Smelling food · left antenna ORNs',
   smellR: 'Smelling food · right antenna ORNs',
@@ -50,7 +54,10 @@ export default function BrainView({ activity, pick, holding, real, ref }) {
       <div ref={ref} className="absolute inset-0 cursor-grab active:cursor-grabbing" onPointerMove={onMove} onPointerLeave={() => setHover(null)} />
 
       <div className="pointer-events-none absolute left-3 top-3 flex max-w-[calc(100%-24px)] flex-col gap-1">
-        <span className="text-[11px] font-medium text-neutral-400">Whole brain · FlyWire v783</span>
+        <span className="text-[11px] font-medium text-neutral-400">
+          Whole brain · FlyWire v783 · every point is a real neuron at its real position
+          {real?.where ? (real.where.kind === 'server' ? ' · simulated on the Base44 server' : ' · simulated in this browser') : ''}
+        </span>
         {real?.status === 'ready' && stats ? (
           <div data-testid="brain-stats" className="flex flex-wrap items-baseline gap-x-3 font-mono text-[11px] text-neutral-400">
             <span>
@@ -70,7 +77,9 @@ export default function BrainView({ activity, pick, holding, real, ref }) {
             <div className="h-1 w-28 overflow-hidden rounded-full bg-white/10">
               <div className="h-full rounded-full bg-accent transition-[width]" style={{ width: `${(real?.progress ?? 0) * 100}%` }} />
             </div>
-            Loading 138,639 neurons · 2.7M connections
+            {real?.transport?.kind === 'browser'
+              ? `Loading 138,639 neurons into this browser (${real.transport.reason})`
+              : 'Connecting to the brain on the Base44 server…'}
           </div>
         )}
         {stats?.trial && (

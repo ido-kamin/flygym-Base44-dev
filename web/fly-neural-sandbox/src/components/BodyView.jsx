@@ -1,9 +1,11 @@
 const BEHAVIOUR = {
   explore: { text: 'Exploring', note: 'walking on its own', dot: 'bg-neutral-300' },
+  walk: { text: 'Walking', note: 'DNp09 is firing', dot: 'bg-neutral-300' },
   forage: { text: 'Foraging', note: 'hungry — following the scent', dot: 'bg-accent' },
   flee: { text: 'Escaping', note: 'giant fiber fired — jump!', dot: 'bg-rose-500' },
   feed: { text: 'Feeding', note: 'proboscis on the sugar', dot: 'bg-accent' },
   groom: { text: 'Grooming', note: 'cleaning its antennae', dot: 'bg-sky-400' },
+  stand: { text: 'Standing', note: 'its walk neurons are quiet', dot: 'bg-neutral-500' },
 };
 
 const SPEEDS = [
@@ -16,7 +18,7 @@ const SPEEDS = [
  * The world: host for the NeuroMechFly arena renderer (created imperatively
  * by FlyBody3D) plus what the fly is doing and the time-scale control.
  */
-export default function BodyView({ ref, status, playback, onPlayback, behaviour, byBrain, armed }) {
+export default function BodyView({ ref, status, playback, onPlayback, behaviour, byBrain, motorMode, armed }) {
   const b = BEHAVIOUR[behaviour] ?? BEHAVIOUR.explore;
   return (
     <section
@@ -30,7 +32,11 @@ export default function BodyView({ ref, status, playback, onPlayback, behaviour,
           <span className={`size-2 rounded-full ${b.dot} ${behaviour === 'flee' ? 'animate-ping' : ''}`} />
           <span className="text-sm font-semibold text-white">{b.text}</span>
           <span className="hidden text-xs text-neutral-400 sm:inline">{b.note}</span>
-          {byBrain && <span className="ml-1 hidden rounded bg-white/[0.07] px-1.5 py-0.5 text-[10px] font-medium text-neutral-300 sm:inline">FlyWire brain</span>}
+          {byBrain && (
+            <span className="ml-1 hidden rounded bg-white/[0.07] px-1.5 py-0.5 text-[10px] font-medium text-neutral-300 sm:inline">
+              {motorMode === 'neurons' ? 'neurons only' : 'FlyWire brain + autopilot'}
+            </span>
+          )}
         </div>
       </div>
 
@@ -52,6 +58,7 @@ export default function BodyView({ ref, status, playback, onPlayback, behaviour,
 
       <div className="pointer-events-none absolute bottom-3 left-3 right-3 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-neutral-500">
         <span>{armed ? 'Click the floor to drop a spider' : 'Click the floor to drop sugar'}</span>
+        <span>Steer with A / D (DNa02) · E = dopamine reward</span>
         <span>Drag to orbit · scroll to zoom</span>
         <span>Legs glow with VNC T1 / T2 / T3</span>
       </div>

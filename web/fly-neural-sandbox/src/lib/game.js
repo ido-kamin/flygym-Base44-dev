@@ -11,6 +11,11 @@
 // after a bump or when idle and fed), and hunger, which sharpens the odour
 // drive. The real FlyWire brain (realBrain.js), when loaded, can steer and
 // trigger these programs through `brainMotor`.
+//
+// motorMode 'neurons': the fly moves ONLY from the FlyWire brain's descending
+// neurons (DNp09 walk, DNa02 turn, DNp01 escape, motor neurons feed, DNg groom);
+// the genome model, noise and scripted instincts are off. 'assist' (default)
+// adds the genome model's steering and the instincts on top.
 
 import { ARENA, MAX_SCORE } from './constants.js';
 import { encodeFlyToBase44 } from './base44.js';
@@ -78,7 +83,8 @@ const GROOM_TIME = 1.6; // s
 const ESCAPE_TIME = 0.45; // s of giant-fiber burst
 const ESCAPE_SPEED = 1.5; // x MAX_SPEED
 /** What the fly is doing, for the HUD. */
-export const BEHAVIOURS = ['explore', 'forage', 'flee', 'feed', 'groom'];
+export const BEHAVIOURS = ['explore', 'forage', 'flee', 'feed', 'groom', 'stand'];
+export const MOTOR_MODES = ['assist', 'neurons'];
 const TAU = Math.PI * 2;
 
 const wrapAngle = (a) => Math.atan2(Math.sin(a), Math.cos(a));
@@ -99,6 +105,7 @@ export class Game {
      * {turn -1..1, escape, escapeSide, feed, groom}. null = connectome model only.
      */
     this.brainMotor = null;
+    this.motorMode = 'assist';
     this.nextPredatorId = 1;
     if (dna) this.loadDNA(dna);
     else this.reset(seed, DEFAULT_WEIGHTS.slice(), 0);
@@ -297,10 +304,19 @@ export class Game {
 
     const { turn, drive } = this.network.motor(w);
     const bm = this.brainMotor;
+    const neurons = this.motorMode === 'neurons';
     this.instincts(h, bm, hunger);
-    let turnCmd = turn + chaos * 1.1 * this.noise + (bm ? bm.turn * 0.6 : 0);
-    const locomotor = 0.3 + 0.7 * norm(w[G.speed]);
-    let vTarget = MAX_SPEED * locomotor * (0.25 + 0.75 * drive);
+    let turnCmd;
+    let vTarget;
+    if (neurons) {
+      // FlyWire descending neurons only: no brain connected = the fly stands still
+      turnCmd = bm ? bm.turn : 0;
+      vTarget = bm ? MAX_SPEED * bm.walk : 0;
+    } else {
+      turnCmd = turn + chaos * 1.1 * this.noise + (bm ? bm.turn * 0.6 : 0);
+      const locomotor = 0.3 + 0.7 * norm(w[G.speed]);
+      vTarget = MAX_SPEED * locomotor * (0.25 + 0.75 * drive);
+    }
     let vRate = 4;
     if (fly.escapeTimer > 0) {
       turnCmd = fly.escapeTurn;
@@ -330,7 +346,7 @@ export class Game {
 
     // metabolism: a baseline cost plus a speed^2 cost that scales with the drive gene
     const vn = fly.v / MAX_SPEED;
-    this.energy -= h * (0.9 + 2.2 * vn * vn * (0.5 + norm(w[G.speed])));
+    this.energy -= h * ((neurons ? 0.4 : 0.9) + 2.2 * vn * vn * (0.5 + norm(w[G.speed])));
     if (this.energy <= 0) {
       this.energy = 0;
       this.over = true;
@@ -369,10 +385,11 @@ export class Game {
     const threat = s.threatL + s.threatR;
     fly.escapeTimer = Math.max(0, fly.escapeTimer - h);
     fly.groomCooldown = Math.max(0, fly.groomCooldown - h);
-    // giant-fiber escape: the model's threat + descending drive peak, or the real brain's DNp01
+    const neurons = this.motorMode === 'neurons';
+    // giant-fiber escape: the real brain's DNp01, or (assist) the model's threat + descending drive peak
     if (fly.escapeCooldown === 0) {
-      if (threat > 1.0 && this.network.a[C.DN] > 0.75) this.escape(s.threatL > s.threatR ? -1 : 1, false);
-      else if (bm?.escape) this.escape(bm.escapeSide, true);
+      if (bm?.escape) this.escape(bm.escapeSide, true);
+      else if (!neurons && threat > 1.0 && this.network.a[C.DN] > 0.75) this.escape(s.threatL > s.threatR ? -1 : 1, false);
     }
     if (fly.feedTimer > 0) {
       fly.feedTime += h;
@@ -384,8 +401,8 @@ export class Game {
     if (fly.groomTimer > 0) {
       fly.groomTimer = threat > 0.3 ? 0 : Math.max(0, fly.groomTimer - h);
     } else if (fly.escapeTimer === 0 && fly.feedTimer === 0 && threat < 0.1 && fly.groomCooldown === 0) {
-      // a fed, safe fly grooms now and then; the real brain's grooming DNs can start it too
-      const idle = hunger < 0.3 && this.rng() < h / 9;
+      // the real brain's grooming DNs start it; in assist mode a fed, safe fly also grooms now and then
+      const idle = !neurons && hunger < 0.3 && this.rng() < h / 9;
       if (idle || bm?.groom) this.groom();
     }
     const odour = s.odorL + s.odorR;
@@ -396,7 +413,11 @@ export class Game {
           ? 'feed'
           : fly.groomTimer > 0
             ? 'groom'
-            : hunger > 0.45 || odour > 0.55
+            : neurons
+              ? fly.v > 25
+                ? 'explore'
+                : 'stand'
+              : hunger > 0.45 || odour > 0.55
               ? 'forage'
               : 'explore';
   }
@@ -489,7 +510,9 @@ export class Game {
         fly.wallCooldown = this.time + 0.5;
         this.events.push({ type: 'bump', x: fly.x, y: fly.y });
         // dust on the antennae: sometimes the fly stops to clean them
-        if (fly.groomTimer === 0 && fly.escapeTimer === 0 && fly.groomCooldown === 0 && this.rng() < 0.3) this.groom();
+        if (this.motorMode !== 'neurons' && fly.groomTimer === 0 && fly.escapeTimer === 0 && fly.groomCooldown === 0 && this.rng() < 0.3) {
+          this.groom();
+        }
       }
     }
   }
@@ -519,7 +542,8 @@ export class Game {
     const reward = norm(this.weights[G.reward]);
     const gain = 10 * (0.5 + reward);
     // proboscis extension: the fly stops to feed
-    this.fly.feedTimer = FEED_TIME;
+    // (neurons mode: only a brief touch; the brain's motor neurons decide how long it feeds)
+    this.fly.feedTimer = this.motorMode === 'neurons' ? 0.25 : FEED_TIME;
     this.fly.feedTime = 0;
     this.fly.groomTimer = 0;
     this.energy = Math.min(MAX_ENERGY, this.energy + gain);
