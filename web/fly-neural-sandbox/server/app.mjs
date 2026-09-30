@@ -324,7 +324,12 @@ export function createFlyServer({
   }
 
   async function handle(req, res) {
-    const url = new URL(req.url, 'http://local');
+    let url;
+    try {
+      url = new URL(req.url, 'http://local');
+    } catch {
+      return json(res, 400, { error: 'bad_request' });
+    }
     try {
       if (url.pathname === '/api/health') {
         return json(res, 200, { ok: true, realApps: Boolean(token), dailyCap, builtToday, brain: brainHost?.info() ?? null });

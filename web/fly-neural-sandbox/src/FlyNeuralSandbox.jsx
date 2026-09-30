@@ -333,7 +333,7 @@ export default function FlyNeuralSandbox() {
       real: null,
       senseClock: 0,
       timeScale: 1,
-      experimentWaiters: [],
+      experimentWaiters: new Map(), // request id -> resolve
     };
     engineRef.current = engine;
     game.setMission(engine.mission);
@@ -403,8 +403,11 @@ export default function FlyNeuralSandbox() {
       },
       onExperiment: (m) => {
         if (disposed) return;
-        setExperiments((list) => [...list, m].slice(-40));
-        engine.experimentWaiters.shift()?.(m);
+        if (!m.dropped) setExperiments((list) => [...list, m].slice(-40));
+        if (m.id == null) return; // calibration, forget
+        const waiter = engine.experimentWaiters.get(m.id);
+        engine.experimentWaiters.delete(m.id);
+        waiter?.(m.dropped ? null : m);
       },
       onError: (err) => {
         console.warn('FlyWire connectome unavailable, using the 16-region model', err);
@@ -852,12 +855,15 @@ export default function FlyNeuralSandbox() {
       new Promise((resolve) => {
         const e = engineRef.current;
         if (!e?.real?.ready) return resolve(null);
-        const t = setTimeout(() => resolve(null), EXPERIMENT_TIMEOUT_MS);
-        e.experimentWaiters.push((m) => {
+        const id = e.real.experiment(action, odor);
+        const t = setTimeout(() => {
+          e.experimentWaiters.delete(id);
+          resolve(null);
+        }, EXPERIMENT_TIMEOUT_MS);
+        e.experimentWaiters.set(id, (m) => {
           clearTimeout(t);
           resolve(m);
         });
-        e.real.experiment(action, odor);
       }),
     [],
   );

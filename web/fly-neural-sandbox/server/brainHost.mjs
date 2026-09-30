@@ -21,6 +21,49 @@ import { parseConnectome } from '../src/lib/lifBrain.js';
 
 const IDLE_MS = 120_000; // a brain with no message from its page for this long is stopped
 const MAX_BUFFERED = 2_000_000; // skip activity frames for slow connections
+const PER_VISITOR = 2; // brains one visitor (address) may hold at once
+const MSG_PER_S = 200; // page -> brain messages a socket may send per second (the page sends ~25)
+
+/** The visitor's address: the rightmost X-Forwarded-For hop (added by the proxy), else the socket peer. */
+function visitorOf(req) {
+  const hops = String(req.headers['x-forwarded-for'] ?? '')
+    .split(',')
+    .map((h) => h.trim())
+    .filter(Boolean);
+  if (hops.length) return hops[hops.length - 1];
+  const peer = req.socket?.remoteAddress ?? '';
+  // behind a proxy that adds no X-Forwarded-For every visitor shares its address: don't cap that
+  return /^(::1|127\.|::ffff:127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|::ffff:(10|192\.168|172\.(1[6-9]|2\d|3[01]))\.|f[cd])/i.test(peer) ? null : peer;
+}
+
+// Base44's own hosting domains: the preview proxy may not forward the page's Host
+const BASE44_HOSTS = /(^|\.)base44(-preview)?\.app$/;
+
+/**
+ * Only pages served from this host, Base44 hosting or PUBLIC_URL may open a brain: blocks other
+ * sites from using visitors' browsers to hold our brains. Clients that send no Origin (not browsers) pass.
+ */
+function originAllowed(req, publicUrl) {
+  const origin = req.headers.origin;
+  if (!origin) return true;
+  let host;
+  try {
+    host = new URL(origin).host.toLowerCase();
+  } catch {
+    return false;
+  }
+  const allowed = [req.headers.host, ...String(req.headers['x-forwarded-host'] ?? '').split(',')]
+    .map((h) => String(h ?? '').trim().toLowerCase())
+    .filter(Boolean);
+  if (publicUrl) {
+    try {
+      allowed.push(new URL(publicUrl).host.toLowerCase());
+    } catch {
+      /* ignore a malformed PUBLIC_URL */
+    }
+  }
+  return allowed.includes(host) || BASE44_HOSTS.test(host.replace(/:\d+$/, ''));
+}
 
 function toShared(typed) {
   const out = new typed.constructor(new SharedArrayBuffer(typed.byteLength));
@@ -29,14 +72,21 @@ function toShared(typed) {
 }
 
 /**
- * @param {{connectomePath:string, maxSessions?:number, now?:()=>number}} opts
+ * @param {{connectomePath:string, maxSessions?:number, perVisitor?:number, publicUrl?:string, now?:()=>number}} opts
  */
-export function createBrainHost({ connectomePath, maxSessions = Math.max(1, os.cpus().length - 1), now = () => Date.now() }) {
+export function createBrainHost({
+  connectomePath,
+  maxSessions = Math.max(1, os.cpus().length - 1),
+  perVisitor = PER_VISITOR,
+  publicUrl = process.env.PUBLIC_URL,
+  now = () => Date.now(),
+}) {
   let loaded = null;
   const sessions = new Set();
   const startedAt = now();
   let totalSessions = 0;
   let selfTest = null; // {at, report} | {pending: Promise}
+  const rejected = new Set(); // origins already logged
 
   /** Parse the connectome once, into memory shared by every brain worker. */
   function load() {
@@ -97,9 +147,11 @@ export function createBrainHost({ connectomePath, maxSessions = Math.max(1, os.c
     return new Worker(new URL('./brainWorker.mjs', import.meta.url), { workerData: { shared, header, mode } });
   }
 
-  function connect(ws) {
-    if (sessions.size >= maxSessions) {
-      ws.send(JSON.stringify({ type: 'busy', ...where() }));
+  function connect(ws, req) {
+    const visitor = req ? visitorOf(req) : null;
+    const mine = visitor ? [...sessions].filter((s) => s.visitor === visitor).length : 0;
+    if (sessions.size >= maxSessions || mine >= perVisitor) {
+      ws.send(JSON.stringify({ type: 'busy', ...where(), perVisitor: mine >= perVisitor }));
       ws.close(1013, 'busy');
       return;
     }
@@ -112,7 +164,7 @@ export function createBrainHost({ connectomePath, maxSessions = Math.max(1, os.c
       return;
     }
     const w = worker('session');
-    const session = { ws, worker: w, lastSeen: now() };
+    const session = { ws, worker: w, visitor, lastSeen: now(), windowStart: now(), count: 0 };
     sessions.add(session);
     totalSessions++;
     const { header } = data;
@@ -148,7 +200,13 @@ export function createBrainHost({ connectomePath, maxSessions = Math.max(1, os.c
     });
     ws.on('message', (raw, isBinary) => {
       if (isBinary || raw.length > 4096) return;
-      session.lastSeen = now();
+      const t = now();
+      session.lastSeen = t;
+      if (t - session.windowStart >= 1000) {
+        session.windowStart = t;
+        session.count = 0;
+      }
+      if (++session.count > MSG_PER_S) return; // flood: drop
       try {
         const msg = JSON.parse(String(raw));
         if (msg && typeof msg.type === 'string') w.postMessage(msg);
@@ -179,8 +237,21 @@ export function createBrainHost({ connectomePath, maxSessions = Math.max(1, os.c
     /** Hook the WebSocket endpoint into an http.Server. */
     attach(server) {
       server.on('upgrade', (req, socket, head) => {
-        const { pathname } = new URL(req.url, 'http://local');
+        let pathname;
+        try {
+          ({ pathname } = new URL(req.url, 'http://local'));
+        } catch {
+          return socket.destroy();
+        }
         if (pathname !== '/api/brain') return socket.destroy();
+        if (!originAllowed(req, publicUrl)) {
+          if (!rejected.has(req.headers.origin) && rejected.size < 100) {
+            rejected.add(req.headers.origin);
+            console.warn(`brain: refused WebSocket from origin ${req.headers.origin} (host ${req.headers.host})`);
+          }
+          socket.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Length: 0\r\n\r\n');
+          return;
+        }
         wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req));
       });
     },

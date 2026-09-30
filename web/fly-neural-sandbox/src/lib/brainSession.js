@@ -17,7 +17,7 @@
 //   {type:'control', name, hz}             neural controls: walk (DNp09), steerL / steerR (DNa02), reward (PAM dopamine);
 //                                          hunger: the fly's internal state, also onto DNp09 (hungry flies walk more)
 //   {type:'lesion', name, on}              silence a neuron group (escape, steer, walk, feed, sugar, dopamine)
-//   {type:'experiment', action, odor}      learning: 'test' or 'train' an odour ('A' | 'B')
+//   {type:'experiment', action, odor, id?} learning: 'test', 'train' or 'punish' an odour ('A' | 'B'); the result echoes id
 //   {type:'speed', scale} / {type:'pause', paused}
 // out (post):
 //   {type:'frame', activity, clusters, groups, stats, spikes, controls, lesions}
@@ -175,7 +175,7 @@ export class BrainSession {
         }
         break;
       case 'experiment':
-        this.startExperiment(msg.action, msg.odor);
+        this.startExperiment(msg.action, msg.odor, false, Number.isInteger(msg.id) ? msg.id : null);
         break;
       case 'reset-learning':
         this.resetLearning();
@@ -245,10 +245,12 @@ export class BrainSession {
    * test = present the odour for 400 ms and measure its KC->MBON drive;
    * train = present it with a reward (PAM dopamine from 100 ms) and apply the learning rule.
    */
-  startExperiment(action, odor, calibration = false) {
-    if (!ODORS[odor] || !this.brain.plastic) return;
+  startExperiment(action, odor, calibration = false, id = null) {
+    const drop = (reason) => id !== null && this.post({ type: 'experiment', id, action, odor, dropped: reason });
+    if (!ODORS[odor] || !this.brain.plastic) return drop('unknown odour');
     if (this.protocol) {
-      if (this.queue.length < 8) this.queue.push([action, odor, calibration]);
+      if (this.queue.length < 8) this.queue.push([action, odor, calibration, id]);
+      else drop('queue full');
       return;
     }
     const key = `odor${odor}`;
@@ -272,6 +274,7 @@ export class BrainSession {
       if (action === 'test' && !this.odorKCs[odor]) this.odorKCs[odor] = this.G.kc.all.filter((i) => d[i] > 0);
       this.post({
         type: 'experiment',
+        id,
         action,
         odor,
         calibration,

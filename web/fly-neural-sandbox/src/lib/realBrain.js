@@ -26,6 +26,7 @@ import { sensoryDrive } from './lifBrain.js';
 
 export const CONNECTOME_URL = 'connectome/flywire783.bin.gz';
 const SERVER_TIMEOUT_MS = 6000;
+const KEEPALIVE_MS = 30_000; // the server reclaims a brain after 120 s without messages
 const RASTER_MS = 4000;
 /** Descending-neuron rates (Hz) that mean "full" command. */
 // escape: spontaneous DNp01 activity is 5-10 Hz and a wall's gentle looming ~30 Hz; an approaching spider drives it past 100
@@ -145,11 +146,18 @@ export class RealBrain {
     this.touch = 0;
     this.speed = 1;
     this.controls = {};
+    this.lesions = {};
+    this.bg = null; // spontaneous rate the page set, re-applied on a new brain
+    this.nextExperimentId = 1;
     this.turnBaseline = 0;
     this.disposed = false;
     this.abort = new AbortController();
     this.onVisibility = () => this.send({ type: 'pause', paused: document.hidden });
     document.addEventListener('visibilitychange', this.onVisibility);
+    // a hidden tab stops sending senses: keep the server brain from being reclaimed as idle
+    this.keepAlive = setInterval(() => {
+      if (document.hidden) this.send({ type: 'pause', paused: true });
+    }, KEEPALIVE_MS);
     if (preferServer && typeof WebSocket !== 'undefined') this.connectServer();
     else this.startLocal('no server');
   }
@@ -160,6 +168,7 @@ export class RealBrain {
     const fallback = (reason) => {
       if (settled || this.disposed) return;
       settled = true;
+      if (this.ws === ws) this.ws = null; // so its close event doesn't start a second local brain
       try {
         ws.close();
       } catch {
@@ -229,7 +238,8 @@ export class RealBrain {
   }
 
   startLocal(reason) {
-    if (this.disposed || this.worker) return;
+    if (this.disposed || this.worker || this.localStarting) return;
+    this.localStarting = true;
     this.fallbackReason = reason;
     this.cb.onTransport?.({ kind: 'browser', reason });
     fetchConnectome(this.baseUrl, (p) => !this.disposed && this.cb.onProgress?.(p), this.abort.signal)
@@ -258,6 +268,8 @@ export class RealBrain {
     // re-apply what the page already asked for
     if (this.speed !== 1) this.send({ type: 'speed', scale: this.speed });
     for (const [name, hz] of Object.entries(this.controls)) this.send({ type: 'control', name, hz });
+    for (const [name, on] of Object.entries(this.lesions)) if (on) this.send({ type: 'lesion', name, on });
+    if (this.bg !== null) this.send({ type: 'background', hz: this.bg });
     if (document.hidden) this.send({ type: 'pause', paused: true });
   }
 
@@ -318,11 +330,13 @@ export class RealBrain {
   }
 
   lesion(name, on) {
+    this.lesions[name] = Boolean(on);
     this.send({ type: 'lesion', name, on });
   }
 
   /** Spontaneous firing of every neuron (Hz). */
   background(hz) {
+    this.bg = hz;
     this.send({ type: 'background', hz });
   }
 
@@ -331,9 +345,11 @@ export class RealBrain {
     this.send({ type: 'reset-learning' });
   }
 
-  /** Learning experiment: action 'test' | 'train', odor 'A' | 'B'. */
+  /** Learning experiment: action 'test' | 'train' | 'punish', odor 'A' | 'B'. Returns the request id its result echoes. */
   experiment(action, odor) {
-    this.send({ type: 'experiment', action, odor });
+    const id = this.nextExperimentId++;
+    this.send({ type: 'experiment', action, odor, id });
+    return id;
   }
 
   /** Brain time per wall time, so slow motion slows the brain with the world. */
@@ -356,6 +372,7 @@ export class RealBrain {
   dispose() {
     this.disposed = true;
     this.abort.abort();
+    clearInterval(this.keepAlive);
     document.removeEventListener('visibilitychange', this.onVisibility);
     try {
       this.ws?.close();

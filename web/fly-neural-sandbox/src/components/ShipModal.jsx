@@ -24,7 +24,14 @@ export default function ShipModal({ dna, weights, score, deployments, shareUrl, 
   const [realApps, setRealApps] = useState(null); // null = checking
   const timer = useRef(null);
 
-  useEffect(() => () => clearTimeout(timer.current), []);
+  const mounted = useRef(true);
+  useEffect(
+    () => () => {
+      mounted.current = false;
+      clearTimeout(timer.current);
+    },
+    [],
+  );
 
   // does this server have a Base44 token? (static hosting has no /api at all)
   useEffect(() => {
@@ -48,10 +55,18 @@ export default function ShipModal({ dna, weights, score, deployments, shareUrl, 
   }, []);
 
   const poll = (id) => {
+    if (!mounted.current) return;
     timer.current = setTimeout(async () => {
       try {
         const r = await fetch(`/api/fly-apps/${id}`);
         const data = await r.json();
+        if (!mounted.current) return;
+        if (!r.ok && r.status !== 429) {
+          // e.g. unknown_app after a server restart: this build can no longer be followed
+          setError('Lost track of this build on the server. Try again.');
+          setState('idle');
+          return;
+        }
         if (data.state === 'live') {
           setState('live');
           setApp((a) => ({ ...a, url: data.url }));

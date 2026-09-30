@@ -210,6 +210,8 @@ describe('fly server', () => {
     expect((await call({ handle }, 'HEAD', '/connectome/missing.bin.gz')).status).toBe(404);
     expect((await call({ handle }, 'HEAD', '/some/page')).status).toBe(200);
     expect((await call({ handle }, 'HEAD', '/%E0%A4%A')).status).toBe(400);
+    // targets that aren't parseable URLs are a 400, not an uncaught throw that kills the process
+    for (const target of ['//', '//a:b', '//[']) expect((await call({ handle }, 'GET', target)).status).toBe(400);
   });
 
   it('serves public/ data directly when configured', async () => {

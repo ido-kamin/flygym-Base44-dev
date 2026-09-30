@@ -52,16 +52,27 @@ describe('BrainSession (the same code runs on the server and in the browser)', (
     s.handle({ type: 'drive', rates: { olfactoryL: 40, olfactoryR: 40, visionL: 20, visionR: 20 } });
     s.handle({ type: 'control', name: 'hunger', hz: 30 });
     const results = () => inbox.filter((m) => m.type === 'experiment' && !m.calibration);
-    // the session first calibrates both odours (finds their Kenyon cells)
-    await until(() => inbox.filter((m) => m.calibration).length === 2);
-    const run = async (action, odor) => {
-      const k = results().length;
-      s.handle({ type: 'experiment', action, odor });
-      return until(() => results()[k]);
+    // queue a whole block at once: the experiments then run back to back in brain time, with no
+    // wall-clock-dependent free running between them, so the result doesn't depend on machine load
+    let id = 0;
+    const block = async (steps) => {
+      const ids = steps.map(([action, odor]) => {
+        s.handle({ type: 'experiment', action, odor, id: ++id });
+        return id;
+      });
+      await until(() => ids.every((i) => results().some((m) => m.id === i)));
+      return ids.map((i) => results().find((m) => m.id === i));
     };
-    for (let i = 0; i < 3; i++) expect((await run('train', 'A')).changed).toBeGreaterThan(0);
-    const a1 = await run('test', 'A');
-    const b1 = await run('test', 'B');
+    // queued behind the session's own calibration of both odours (which finds their Kenyon cells)
+    const [t1, t2, t3, a1, b1] = await block([
+      ['train', 'A'],
+      ['train', 'A'],
+      ['train', 'A'],
+      ['test', 'A'],
+      ['test', 'B'],
+    ]);
+    expect(inbox.filter((m) => m.calibration)).toHaveLength(2);
+    for (const t of [t1, t2, t3]) expect(t.changed).toBeGreaterThan(0);
     // drive relative to each odour's calibrated (untrained) drive
     const dA = 1 - a1.drive / a1.baseline;
     const dB = 1 - b1.drive / b1.baseline;
@@ -71,8 +82,12 @@ describe('BrainSession (the same code runs on the server and in the browser)', (
     expect(a1.memory.valence).toBeGreaterThan(0.05);
     expect(Math.abs(b1.memory.valence)).toBeLessThan(a1.memory.valence / 2);
     // punishing B makes it aversive
-    for (let i = 0; i < 3; i++) await run('punish', 'B');
-    const b2 = await run('test', 'B');
+    const [, , , b2] = await block([
+      ['punish', 'B'],
+      ['punish', 'B'],
+      ['punish', 'B'],
+      ['test', 'B'],
+    ]);
     expect(b2.memory.valence).toBeLessThan(-0.03);
     s.stop();
   }, 180000);
