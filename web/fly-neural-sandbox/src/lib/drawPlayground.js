@@ -3,7 +3,7 @@
 
 import { ARENA, GRID } from './constants.js';
 import { quantizePose } from './base44.js';
-import { PIPELINE, PREDATOR_RADIUS } from './game.js';
+import { MISSIONS, PREDATOR_RADIUS, SEARCH_TOKEN } from './game.js';
 
 /** Vibecode token colors; Base uses the Base brand blue. */
 export const TOKEN_COLORS = {
@@ -12,7 +12,17 @@ export const TOKEN_COLORS = {
   Mint: '#a3e635',
   Deploy: '#e879f9',
   Base: '#3b7bff',
+  // Base44 builder tasks
+  'Add page': '#e879f9',
+  'Add entity': '#a78bfa',
+  'Connect login': '#22d3ee',
+  'Design UI': '#f472b6',
+  'Add function': '#fbbf24',
+  Publish: '#a3e635',
+  // web search
+  [SEARCH_TOKEN]: '#22d3ee',
 };
+const RESULT_COLOR = '#e0f2fe';
 
 const TAU = Math.PI * 2;
 
@@ -21,7 +31,7 @@ export function createPlaygroundView(canvas) {
   let dpr = 1;
   let time = 0;
   let cursor = null;
-  let mode = 'sugar';
+  let mission = 'forage';
   const particles = [];
   const texts = [];
   const rings = [];
@@ -91,11 +101,20 @@ export function createPlaygroundView(canvas) {
         rings.push({ x: ev.x, y: ev.y, age: 0, life: 0.8, color: '244,63,94', r: 70 });
       } else if (ev.type === 'sugar') {
         burst(ev.x, ev.y, ['#fde047', '#fef9c3'], 10, 70);
-      } else if (ev.type === 'stage' && mode === 'vibe') {
+      } else if (ev.type === 'stage') {
         texts.push({ x: ARENA.w / 2, y: 70, text: `[${ev.stage}] ✓ ${Math.round(ev.progress * 100)}%`, color: TOKEN_COLORS[ev.stage], age: 0, life: 1.3 });
-      } else if (ev.type === 'deployed' && mode === 'vibe') {
+      } else if (ev.type === 'deployed') {
         banner('DEPLOYED ON BASE 🚀', '#6b9bff', 2.2);
         burst(ARENA.w / 2, ARENA.h / 2, ['#3b7bff', '#ffffff', '#e879f9'], 60, 320);
+      } else if (ev.type === 'shipped') {
+        banner('APP SHIPPED ON BASE44 🚀', '#f0abfc', 2.4);
+        burst(ARENA.w / 2, ARENA.h / 2, ['#e879f9', '#ffffff', '#22d3ee', '#a3e635'], 70, 340);
+      } else if (ev.type === 'read') {
+        texts.push({ x: ARENA.w / 2, y: 70, text: `📖 +knowledge`, color: '#67e8f9', age: 0, life: 1.2 });
+      } else if (ev.type === 'trained' && ev.reward >= 1) {
+        texts.push({ x: ARENA.w / 2, y: ARENA.h - 60, text: 'GOOD FLY! 🍬', color: '#bef264', age: 0, life: 1.3, big: true });
+      } else if (ev.type === 'trained' && ev.reward <= -1) {
+        texts.push({ x: ARENA.w / 2, y: ARENA.h - 60, text: 'NO! ⚡', color: '#fb7185', age: 0, life: 1.1, big: true });
       } else if (ev.type === 'levelup') {
         banner('GENERATION UP', '#f0abfc', 1.6);
       }
@@ -189,11 +208,12 @@ export function createPlaygroundView(canvas) {
   }
 
   function drawToken(s, need) {
-    const color = TOKEN_COLORS[s.kind] ?? '#ffffff';
+    const color = s.result ? RESULT_COLOR : (TOKEN_COLORS[s.kind] ?? '#ffffff');
     const pop = Math.min(1, s.age * 4);
-    const next = s.kind === need;
+    const next = s.kind === need || s.kind === SEARCH_TOKEN;
     const pulse = 0.7 + 0.3 * Math.sin(time * (next ? 7 : 3) + s.phase);
-    const label = `[${s.kind}]`;
+    const title = s.kind.length > 24 ? `${s.kind.slice(0, 23)}…` : s.kind;
+    const label = s.result ? `📄 ${title}` : s.kind === SEARCH_TOKEN ? '🔎 Search' : mission === 'build' ? `＋ ${s.kind}` : `[${s.kind}]`;
     ctx.save();
     ctx.translate(s.x, s.y);
     ctx.scale(pop, pop);
@@ -223,13 +243,14 @@ export function createPlaygroundView(canvas) {
     ctx.restore();
   }
 
-  function drawPipeline(game) {
-    const x0 = ARENA.w - 20 - PIPELINE.length * 70;
+  function drawPipeline(game, stages) {
+    const cell = stages.length > 5 ? 84 : 70;
+    const x0 = ARENA.w - 20 - stages.length * cell;
     ctx.save();
     ctx.font = '700 10px ui-monospace, SFMono-Regular, Menlo, monospace';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    PIPELINE.forEach((stage, i) => {
+    stages.forEach((stage, i) => {
       const done = i < game.pipeline;
       const active = i === game.pipeline;
       const color = TOKEN_COLORS[stage];
@@ -237,11 +258,11 @@ export function createPlaygroundView(canvas) {
       ctx.fillStyle = done ? color : 'rgba(3,6,20,0.8)';
       ctx.strokeStyle = color;
       ctx.beginPath();
-      ctx.roundRect(x0 + i * 70, 16, 62, 18, 4);
+      ctx.roundRect(x0 + i * cell, ARENA.h - 34, cell - 8, 18, 4);
       ctx.fill();
       ctx.stroke();
       ctx.fillStyle = done ? '#020617' : color;
-      ctx.fillText(stage, x0 + i * 70 + 31, 25.5);
+      ctx.fillText(stage, x0 + i * cell + (cell - 8) / 2, ARENA.h - 24.5);
     });
     ctx.restore();
   }
@@ -597,11 +618,13 @@ export function createPlaygroundView(canvas) {
     drawGrid(game);
     drawOdor(game);
     drawTrail(game);
-    if (mode === 'vibe') {
-      const need = PIPELINE[game.pipeline];
-      for (const s of game.sugars) drawToken(s, need);
-    } else {
+    mission = game.mission ?? 'forage';
+    const stages = MISSIONS[mission]?.stages;
+    if (mission === 'forage') {
       for (const s of game.sugars) drawSugar(s);
+    } else {
+      const need = stages?.[game.pipeline];
+      for (const s of game.sugars) drawToken(s, need);
     }
     drawSensoryRays(game);
     for (const p of game.predators) drawSpider(p);
@@ -610,7 +633,7 @@ export function createPlaygroundView(canvas) {
     if (cursor && cursor.armed) {
       drawSpider({ x: cursor.x, y: cursor.y, theta: -Math.PI / 2, gait: time, hunting: false }, 0.45);
     }
-    if (mode === 'vibe') drawPipeline(game);
+    if (stages) drawPipeline(game, stages);
     ctx.restore();
     drawBorder();
   }
@@ -621,9 +644,6 @@ export function createPlaygroundView(canvas) {
     clientToWorld,
     setCursor(c) {
       cursor = c;
-    },
-    setMode(m) {
-      mode = m;
     },
     dispose() {
       observer.disconnect();

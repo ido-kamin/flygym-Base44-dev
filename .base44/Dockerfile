@@ -1,8 +1,5 @@
-FROM python:3.14-slim
+FROM node:22-bookworm-slim
 
-# Only runtime/system dependencies live in the image; source is bind-mounted.
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends libegl1 libgl1 libopengl0 ffmpeg \
-    && rm -rf /var/lib/apt/lists/*
-RUN pip install --no-cache-dir uv==0.8.22
-WORKDIR /app
+# Only the runtime lives in the image; the source is bind-mounted.
+# The game (web/fly-neural-sandbox) is built and served by its own Node server.
+WORKDIR /app/web/fly-neural-sandbox

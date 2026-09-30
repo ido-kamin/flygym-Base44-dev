@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 const LINE_TONE = {
   header: 'text-sky-300/80',
@@ -15,29 +15,44 @@ const STATUS_TONE = {
   info: 'border-sky-300/40 text-sky-100',
 };
 
-/** Floating "FlyCode" terminal: pseudo-Solidity streamed by the fly's leg steps. */
-export function FlyCodeTerminal({ dna, weights, lines }) {
+const HEADERS = {
+  vibe: (dna, genes) => ({ file: `~/contracts/FlyCoin_${dna}.sol`, first: `contract FlyCoin_${dna} {`, note: `// genes 0x${genes}` }),
+  build: (dna, genes) => ({ file: `base44 · fly-${dna}`, first: `$ base44 create --from-dna ${dna}`, note: `# genes 0x${genes}` }),
+  search: (dna) => ({ file: `fly://search · ${dna}`, first: '$ fly search --curious', note: '# antennae online' }),
+  forage: (dna, genes) => ({ file: `brain.log · ${dna}`, first: '$ fly forage', note: `# genes 0x${genes}` }),
+};
+
+/** Floating mission log, streamed one line per leg step (see flycode.js). */
+export function FlyCodeTerminal({ dna, weights, lines, mission = 'vibe' }) {
   const scrollRef = useRef(null);
+  const [open, setOpen] = useState(true);
   useEffect(() => {
     const el = scrollRef.current;
     if (el) el.scrollTop = el.scrollHeight;
   }, [lines]);
   const genes = weights.map((w) => w.toString(16).toUpperCase()).join('');
+  const head = (HEADERS[mission] ?? HEADERS.vibe)(dna, genes);
 
   return (
     <div
       data-testid="flycode-terminal"
-      className="pointer-events-none absolute bottom-3 left-3 z-10 w-[min(560px,calc(100%-24px))] overflow-hidden rounded-xl border border-emerald-300/30 bg-black/80 shadow-[0_0_30px_-8px_rgba(52,211,153,0.6)] backdrop-blur"
+      className="absolute bottom-3 left-3 z-10 w-[min(480px,calc(100%-24px))] overflow-hidden rounded-xl border border-emerald-300/30 bg-black/75 shadow-[0_0_30px_-8px_rgba(52,211,153,0.6)] backdrop-blur"
     >
-      <div className="flex items-center gap-1.5 border-b border-white/10 px-3 py-1.5">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className="flex w-full items-center gap-1.5 border-b border-white/10 px-3 py-1.5 text-left"
+        aria-expanded={open}
+      >
         <span className="size-2 rounded-full bg-rose-400" />
         <span className="size-2 rounded-full bg-amber-300" />
         <span className="size-2 rounded-full bg-emerald-400" />
-        <span className="ml-2 font-mono text-[10px] font-bold text-slate-400">flycode — ~/contracts/FlyCoin_{dna}.sol</span>
-      </div>
-      <div ref={scrollRef} className="h-32 overflow-hidden px-3 py-2 font-mono text-[10.5px] leading-[1.45] sm:h-36">
+        <span className="ml-2 truncate font-mono text-[10px] font-bold text-slate-400">flycode — {head.file}</span>
+        <span className="ml-auto font-mono text-[10px] text-slate-500">{open ? '▾' : '▸'}</span>
+      </button>
+      <div ref={scrollRef} className={`pointer-events-none overflow-hidden px-3 font-mono text-[10.5px] leading-[1.45] ${open ? 'h-24 py-2 sm:h-28' : 'h-0'}`}>
         <div className="text-sky-300/80">
-          contract FlyCoin_{dna} {'{'} <span className="text-slate-500">// genes 0x{genes}</span>
+          {head.first} <span className="text-slate-500">{head.note}</span>
         </div>
         {lines.map((l) => (
           <div key={l.id} className={`truncate whitespace-pre ${LINE_TONE[l.kind] ?? LINE_TONE.code}`}>
@@ -56,7 +71,7 @@ export function FlyCodeTerminal({ dna, weights, lines }) {
 export function FlyStatus({ status }) {
   if (!status) return null;
   return (
-    <div className="pointer-events-none absolute inset-x-3 top-12 z-10 flex justify-center">
+    <div className="pointer-events-none absolute left-3 top-3 z-10 flex max-w-[min(520px,calc(100%-24px))]">
       <div
         key={status.text}
         data-testid="fly-status"
