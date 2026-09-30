@@ -1,0 +1,80 @@
+@import 'tailwindcss';
+
+@theme {
+  --color-void: #02030a;
+  --color-panel: #070a18;
+  --color-neon-cyan: #22d3ee;
+  --color-neon-blue: #3b82f6;
+  --color-neon-magenta: #e879f9;
+  --color-neon-violet: #a78bfa;
+  --color-neon-orange: #fb923c;
+  --color-neon-lime: #a3e635;
+  --color-neon-gold: #fde047;
+  --color-neon-red: #f43f5e;
+
+  --font-mono: ui-monospace, 'SF Mono', SFMono-Regular, 'JetBrains Mono', Menlo, Consolas, monospace;
+
+  --animate-dna-flash: dna-flash 0.8s ease-out;
+  --animate-bump: bump 0.4s cubic-bezier(0.2, 1.6, 0.4, 1);
+  --animate-toast-in: toast-in 0.25s ease-out;
+  --animate-scan: scan 6s linear infinite;
+  --animate-pulse-red: pulse-red 0.9s ease-in-out infinite;
+
+  @keyframes dna-flash {
+    0% {
+      color: #ffffff;
+      text-shadow: 0 0 14px #e879f9, 0 0 30px #22d3ee;
+      transform: translateY(-3px) scale(1.22);
+    }
+    100% {
+      transform: none;
+    }
+  }
+  @keyframes bump {
+    0% {
+      transform: scale(1.35);
+      color: #fde047;
+    }
+    100% {
+      transform: scale(1);
+    }
+  }
+  @keyframes toast-in {
+    from {
+      opacity: 0;
+      transform: translate(-50%, 12px);
+    }
+    to {
+      opacity: 1;
+      transform: translate(-50%, 0);
+    }
+  }
+  @keyframes scan {
+    from {
+      transform: translateY(-100%);
+    }
+    to {
+      transform: translateY(100%);
+    }
+  }
+  @keyframes pulse-red {
+    50% {
+      box-shadow: 0 0 18px 2px rgba(244, 63, 94, 0.75);
+    }
+  }
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
+body {
+  background: var(--color-void);
+  -webkit-font-smoothing: antialiased;
+}
+
+canvas {
+  touch-action: none;
+}
