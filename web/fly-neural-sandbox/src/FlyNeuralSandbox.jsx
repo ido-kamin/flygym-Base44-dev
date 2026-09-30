@@ -345,12 +345,13 @@ export default function FlyNeuralSandbox() {
     engine.real = new RealBrain({
       baseUrl: import.meta.env.BASE_URL,
       onProgress: (p) => {
-        if (p - lastProgress > 0.02) {
+        if (!disposed && p - lastProgress > 0.02) {
           lastProgress = p;
           setReal({ status: 'loading', progress: p });
         }
       },
       onReady: (m) => {
+        if (disposed) return;
         brain.setConnectome(m.cluster);
         setReal({ status: 'ready', progress: 1, n: m.n, nnz: m.nnz });
       },
@@ -700,12 +701,15 @@ export default function FlyNeuralSandbox() {
     if (!e) return;
     e.timeScale = playback;
     e.body?.setPlayback(playback);
+    e.real?.setSpeed(playback);
   }, [playback, bodyStatus]);
 
   // keyboard shortcuts (ignored while typing a name)
   useEffect(() => {
     const onKey = (ev) => {
-      if (ev.metaKey || ev.ctrlKey || ev.altKey || ev.target instanceof HTMLInputElement) return;
+      const t = ev.target;
+      const typing = t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement || t instanceof HTMLSelectElement || t?.isContentEditable;
+      if (ev.metaKey || ev.ctrlKey || ev.altKey || typing) return;
       const k = ev.key.toLowerCase();
       if (k === 'm') onMutate();
       else if (k === 'p') onTogglePredator();

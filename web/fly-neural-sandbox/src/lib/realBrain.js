@@ -6,7 +6,7 @@
 //   eyes: light + image motion -> R1-6 / R7 / R8 photoreceptors    (continuous)
 //   eyes: a spider looming L/R -> LPLC2 / LC4 looming detectors   (continuous)
 //   bumping a wall             -> mechanosensory neurons           (continuous)
-//   eating                     -> sugar GRNs, 200 Hz for 1 s       (trial)
+//   eating                     -> sugar GRNs, 200 Hz for 0.4 s     (trial)
 //   catching a new scent L/R   -> olfactory receptor neurons       (trial)
 // Descending / motor neurons -> behaviour:
 //   DNa02 (+DNa01) L/R -> steering  (high-passed, so tonic asymmetries don't make it circle)
@@ -18,8 +18,8 @@ import { sensoryDrive } from './lifBrain.js';
 
 export const CONNECTOME_URL = 'connectome/flywire783.bin.gz';
 
-async function fetchConnectome(baseUrl, onProgress) {
-  const r = await fetch(`${baseUrl}${CONNECTOME_URL}`);
+async function fetchConnectome(baseUrl, onProgress, signal) {
+  const r = await fetch(`${baseUrl}${CONNECTOME_URL}`, { signal });
   if (!r.ok) throw new Error(`connectome: HTTP ${r.status}`);
   const total = Number(r.headers.get('content-length')) || 7.7e6;
   // count compressed bytes as they arrive, then inflate
@@ -55,6 +55,7 @@ async function fetchConnectome(baseUrl, onProgress) {
 export class RealBrain {
   constructor({ baseUrl = './', onReady, onFrame, onProgress, onError } = {}) {
     this.ready = false;
+    this.speed = 1;
     this.frame = null;
     this.steerBaseline = 0;
     this.touch = 0;
@@ -62,7 +63,11 @@ export class RealBrain {
     this.lastOdor = 0;
     this.worker = null;
     this.disposed = false;
-    fetchConnectome(baseUrl, onProgress)
+    this.abort = new AbortController();
+    // pause the simulation while the tab is hidden (it would otherwise keep a CPU core busy)
+    this.onVisibility = () => this.worker?.postMessage({ type: 'pause', paused: document.hidden });
+    document.addEventListener('visibilitychange', this.onVisibility);
+    fetchConnectome(baseUrl, (p) => !this.disposed && onProgress?.(p), this.abort.signal)
       .then((buffer) => {
         if (this.disposed) return;
         this.worker = new Worker(new URL('./connectomeWorker.js', import.meta.url), { type: 'module' });
@@ -79,8 +84,11 @@ export class RealBrain {
         };
         this.worker.onerror = (e) => onError?.(e);
         this.worker.postMessage({ type: 'init', buffer }, [buffer]);
+        if (this.speed !== 1) this.setSpeed(this.speed);
       })
-      .catch((err) => onError?.(err));
+      .catch((err) => {
+        if (!this.disposed) onError?.(err);
+      });
   }
 
   /**
@@ -113,11 +121,17 @@ export class RealBrain {
     this.lastOdor += (odor - this.lastOdor) * Math.min(1, dt / 1.5);
   }
 
+  /** Brain time per wall time, so slow motion slows the brain with the world. */
+  setSpeed(scale) {
+    this.speed = scale;
+    this.worker?.postMessage({ type: 'speed', scale });
+  }
+
   trial(name) {
     if (this.worker && this.ready) this.worker.postMessage({ type: 'trial', name });
   }
 
-  /** The proboscis touches sugar: a 1 s sugar-GRN trial. */
+  /** The proboscis touches sugar: a short sugar-GRN trial (TRIALS.sugar). */
   tasteSugar() {
     this.trial('sugar');
   }
@@ -151,6 +165,8 @@ export class RealBrain {
 
   dispose() {
     this.disposed = true;
+    this.abort.abort();
+    document.removeEventListener('visibilitychange', this.onVisibility);
     this.worker?.terminate();
   }
 }

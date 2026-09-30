@@ -17,6 +17,7 @@ import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { extname, join, normalize, resolve } from 'node:path';
+import { pipeline } from 'node:stream/promises';
 
 import { decodeFlyFromBase44, DNAError } from '../src/lib/base44.js';
 import { flyAppPrompt } from '../src/lib/base44App.js';
@@ -54,21 +55,36 @@ async function readJson(req, limit = 2048) {
   }
 }
 
-/** Sliding-window limiter: at most `max` hits per `windowMs` per key. */
+/**
+ * Sliding-window limiter: at most `max` hits per `windowMs` per key.
+ * `limit(key)` records a hit if allowed; `limit(key, false)` only checks.
+ * Keys whose hits have all expired are pruned, so memory stays bounded.
+ */
 export function rateLimiter(max, windowMs, now = () => Date.now()) {
   const hits = new Map();
-  return (key) => {
+  let lastPrune = now();
+  const limit = (key, commit = true) => {
     const t = now();
+    if (t - lastPrune > windowMs) {
+      lastPrune = t;
+      for (const [k, list] of hits) if (!list.length || t - list[list.length - 1] >= windowMs) hits.delete(k);
+    }
     const list = (hits.get(key) ?? []).filter((x) => t - x < windowMs);
     if (list.length >= max) {
       hits.set(key, list);
       return false;
     }
-    list.push(t);
-    hits.set(key, list);
+    if (commit) {
+      list.push(t);
+      hits.set(key, list);
+    }
     return true;
   };
+  limit.size = () => hits.size;
+  return limit;
 }
+
+const SEARCH_CACHE_MAX = 200;
 
 const stripHtml = (s) =>
   s
@@ -82,11 +98,12 @@ const stripHtml = (s) =>
 /**
  * @param {object} opts
  * @param {string} opts.distDir     built game to serve
+ * @param {string} [opts.publicDir] static data served directly (Vite's public/), preferred over its copy in dist/
  * @param {object} [opts.env]       process.env-like config
  * @param {typeof fetch} [opts.fetchImpl]
  * @param {() => number} [opts.now]
  */
-export function createFlyServer({ distDir, env = process.env, fetchImpl = fetch, now = () => Date.now() } = {}) {
+export function createFlyServer({ distDir, publicDir = null, env = process.env, fetchImpl = fetch, now = () => Date.now() } = {}) {
   const token = env.BASE44_API_TOKEN || '';
   const apiBase = (env.BASE44_API_URL || 'https://app.base44.com').replace(/\/$/, '');
   const dailyCap = Number(env.FLY_APPS_DAILY_CAP || 25);
@@ -96,6 +113,7 @@ export function createFlyServer({ distDir, env = process.env, fetchImpl = fetch,
   const perVisitor = rateLimiter(1, 120_000, now); // 1 real build / 2 min / visitor
   const global = rateLimiter(4, 60_000, now); // stay under the Platform API's 5/min
   const searchLimit = rateLimiter(30, 60_000, now);
+  const statusLimit = rateLimiter(60, 60_000, now); // app-status polls (each may call the Platform API)
   let day = new Date(now()).toISOString().slice(0, 10);
   let builtToday = 0;
   /** apps this server created: id -> {dna, name, createdAt, url?} (never proxy other ids) */
@@ -144,7 +162,10 @@ export function createFlyServer({ distDir, env = process.env, fetchImpl = fetch,
         snippet: stripHtml(s.snippet ?? '').slice(0, 220),
         url: `https://en.wikipedia.org/wiki/${encodeURIComponent(s.title.replace(/ /g, '_'))}`,
       }));
+      searchCache.delete(q.toLowerCase());
       searchCache.set(q.toLowerCase(), { at: now(), results });
+      // bounded: drop the oldest entries (Map keeps insertion order)
+      while (searchCache.size > SEARCH_CACHE_MAX) searchCache.delete(searchCache.keys().next().value);
       return json(res, 200, { query: q, results });
     } catch (err) {
       return json(res, 502, { error: 'search_unavailable', detail: String(err.message ?? err) });
@@ -167,8 +188,11 @@ export function createFlyServer({ distDir, env = process.env, fetchImpl = fetch,
       builtToday = 0;
     }
     if (builtToday >= dailyCap) return json(res, 429, { error: 'daily_cap' });
-    if (!perVisitor(clientKey(req))) return json(res, 429, { error: 'rate_limited' });
+    // check the visitor first but only count the hit once the global limit lets the build through
+    const visitor = clientKey(req);
+    if (!perVisitor(visitor, false)) return json(res, 429, { error: 'rate_limited' });
     if (!global('all')) return json(res, 429, { error: 'busy' });
+    perVisitor(visitor);
 
     const link = publicUrl ? `${publicUrl.replace(/\/$/, '')}/#dna=${fly.dna}` : '';
     const { title, prompt } = flyAppPrompt(fly.dna, fly.weights, { score: fly.score, url: link });
@@ -190,9 +214,10 @@ export function createFlyServer({ distDir, env = process.env, fetchImpl = fetch,
     }
   }
 
-  async function appStatus(res, id) {
+  async function appStatus(req, res, id) {
     const job = jobs.get(id);
     if (!job) return json(res, 404, { error: 'unknown_app' });
+    if (!statusLimit(clientKey(req))) return json(res, 429, { error: 'rate_limited' });
     if (job.url) return json(res, 200, { id, state: 'live', url: job.url, name: job.name });
     try {
       const app = await base44('GET', `/api/apps/${id}`);
@@ -203,7 +228,12 @@ export function createFlyServer({ distDir, env = process.env, fetchImpl = fetch,
       if (state !== 'ready') return json(res, 200, { id, state: 'building', name: job.name });
       if (!job.deploying) {
         job.deploying = true;
-        await base44('POST', `/api/apps/${id}/deploy`, {});
+        try {
+          await base44('POST', `/api/apps/${id}/deploy`, {});
+        } catch (err) {
+          job.deploying = false; // try the deploy again on the next poll
+          throw err;
+        }
       }
       const pub = await base44('GET', `/api/apps/platform/${id}/published-url`);
       if (pub?.url) job.url = pub.url;
@@ -215,11 +245,32 @@ export function createFlyServer({ distDir, env = process.env, fetchImpl = fetch,
 
   async function serveStatic(req, res, url) {
     const root = resolve(distDir);
-    let path = normalize(decodeURIComponent(url.pathname)).replace(/^(\.\.[/\\])+/, '');
+    let decoded;
+    try {
+      decoded = decodeURIComponent(url.pathname);
+    } catch {
+      return json(res, 400, { error: 'bad_path' });
+    }
+    let path = normalize(decoded).replace(/^(\.\.[/\\])+/, '');
     let file = join(root, path);
     if (!file.startsWith(root)) return json(res, 403, { error: 'forbidden' });
-    let info = await stat(file).catch(() => null);
+    let info = null;
+    // static data (connectome, meshes) straight from public/: it never changes while dist/ is being rebuilt
+    if (publicDir) {
+      const pub = resolve(publicDir);
+      const candidate = join(pub, path);
+      if (candidate.startsWith(pub)) {
+        const s = await stat(candidate).catch(() => null);
+        if (s?.isFile()) {
+          file = candidate;
+          info = s;
+        }
+      }
+    }
+    info ??= await stat(file).catch(() => null);
     if (!info || info.isDirectory()) {
+      // a missing file is a 404; only page routes (no extension) fall back to the game
+      if (extname(path) && extname(path) !== '.html') return json(res, 404, { error: 'not_found' });
       // SPA: unknown paths (and "/") get the game
       file = join(root, 'index.html');
       path = '/index.html';
@@ -244,12 +295,20 @@ export function createFlyServer({ distDir, env = process.env, fetchImpl = fetch,
       'x-content-type-options': 'nosniff',
     });
     if (req.method === 'HEAD') return res.end();
-    createReadStream(file).pipe(res);
+    // the file can vanish between stat() and open (e.g. a rebuild replacing dist/): end this response, don't crash
+    pipeline(createReadStream(file), res).catch(() => res.destroy?.());
   }
 
+  /**
+   * The visitor's address. The client controls the leftmost X-Forwarded-For
+   * entries; the rightmost one is added by the proxy in front of this server.
+   */
   function clientKey(req) {
-    const fwd = String(req.headers['x-forwarded-for'] ?? '').split(',')[0].trim();
-    return fwd || req.socket?.remoteAddress || 'unknown';
+    const hops = String(req.headers['x-forwarded-for'] ?? '')
+      .split(',')
+      .map((h) => h.trim())
+      .filter(Boolean);
+    return hops[hops.length - 1] || req.socket?.remoteAddress || 'unknown';
   }
 
   async function handle(req, res) {
@@ -261,7 +320,7 @@ export function createFlyServer({ distDir, env = process.env, fetchImpl = fetch,
       if (url.pathname === '/api/search' && req.method === 'GET') return await search(req, res, url);
       if (url.pathname === '/api/fly-apps' && req.method === 'POST') return await createApp(req, res);
       const m = url.pathname.match(/^\/api\/fly-apps\/([a-f0-9]{24})$/);
-      if (m && req.method === 'GET') return await appStatus(res, m[1]);
+      if (m && req.method === 'GET') return await appStatus(req, res, m[1]);
       if (url.pathname.startsWith('/api/')) return json(res, 404, { error: 'not_found' });
       if (req.method !== 'GET' && req.method !== 'HEAD') return json(res, 405, { error: 'method_not_allowed' });
       return await serveStatic(req, res, url);

@@ -169,6 +169,62 @@ describe('fly server', () => {
     expect((await call({ handle }, 'GET', '/api/search?q=')).status).toBe(400);
   });
 
+  it('keys visitors by the proxy-added (rightmost) X-Forwarded-For hop, so spoofed hops do not bypass limits', async () => {
+    const { fetchImpl } = mockBase44();
+    const { handle } = createFlyServer({ distDir: fakeDist(), env: { BASE44_API_TOKEN: 'tok' }, fetchImpl });
+    const as = (spoof) => ({ 'x-forwarded-for': `${spoof}, 203.0.113.7` });
+    expect((await call({ handle }, 'POST', '/api/fly-apps', { dna: DNA }, as('6.6.6.6'))).status).toBe(201);
+    expect((await call({ handle }, 'POST', '/api/fly-apps', { dna: DNA }, as('7.7.7.7'))).json.error).toBe('rate_limited');
+  });
+
+  it('a busy server does not use up the visitor\'s own build slot', async () => {
+    const { fetchImpl } = mockBase44();
+    const { handle } = createFlyServer({ distDir: fakeDist(), env: { BASE44_API_TOKEN: 'tok' }, fetchImpl });
+    for (const ip of ['a', 'b', 'c', 'd']) expect((await call({ handle }, 'POST', '/api/fly-apps', { dna: DNA }, { ip })).status).toBe(201);
+    expect((await call({ handle }, 'POST', '/api/fly-apps', { dna: DNA }, { ip: 'e' })).json.error).toBe('busy');
+    const { handle: h2 } = createFlyServer({ distDir: fakeDist(), env: { BASE44_API_TOKEN: 'tok' }, fetchImpl });
+    expect((await call({ handle: h2 }, 'POST', '/api/fly-apps', { dna: DNA }, { ip: 'e' })).status).toBe(201);
+  });
+
+  it('retries a deploy that failed on the next poll', async () => {
+    const { calls, fetchImpl } = mockBase44();
+    let failDeploy = true;
+    const flaky = async (url, init) => {
+      if (String(url).endsWith('/deploy') && failDeploy) {
+        failDeploy = false;
+        calls.push({ url: String(url) });
+        return { ok: false, status: 500, text: async () => '{}' };
+      }
+      return fetchImpl(url, init);
+    };
+    const { handle } = createFlyServer({ distDir: fakeDist(), env: { BASE44_API_TOKEN: 'tok' }, fetchImpl: flaky });
+    const id = (await call({ handle }, 'POST', '/api/fly-apps', { dna: DNA })).json.id;
+    await call({ handle }, 'GET', `/api/fly-apps/${id}`); // building
+    expect((await call({ handle }, 'GET', `/api/fly-apps/${id}`)).json.state).toBe('deploying'); // deploy failed
+    expect((await call({ handle }, 'GET', `/api/fly-apps/${id}`)).json.state).toBe('live');
+    expect(calls.filter((c) => c.url.endsWith('/deploy'))).toHaveLength(2);
+  });
+
+  it('404s missing data files instead of serving the page, and 400s malformed paths', async () => {
+    const { handle } = createFlyServer({ distDir: fakeDist(), env: {} });
+    expect((await call({ handle }, 'HEAD', '/connectome/missing.bin.gz')).status).toBe(404);
+    expect((await call({ handle }, 'HEAD', '/some/page')).status).toBe(200);
+    expect((await call({ handle }, 'HEAD', '/%E0%A4%A')).status).toBe(400);
+  });
+
+  it('serves public/ data directly when configured', async () => {
+    const pub = mkdtempSync(join(tmpdir(), 'fly-public-'));
+    mkdirSync(join(pub, 'connectome'));
+    writeFileSync(join(pub, 'connectome', 'flywire783.bin.gz'), Buffer.from([0x1f, 0x8b, 1, 2, 3]));
+    const { handle } = createFlyServer({ distDir: fakeDist(), publicDir: pub, env: {} });
+    const r = await call({ handle }, 'HEAD', '/connectome/flywire783.bin.gz');
+    expect(r.status).toBe(200);
+    expect(r.headers['content-length']).toBe(5);
+    // traversal is normalized away: it can only ever reach the game page
+    const escaped = await call({ handle }, 'HEAD', '/connectome/../../etc/passwd');
+    expect(escaped.headers['content-type']).toMatch(/text\/html/);
+  });
+
   it('rate limiter slides its window', () => {
     let t = 0;
     const lim = rateLimiter(2, 1000, () => t);
@@ -177,5 +233,10 @@ describe('fly server', () => {
     expect(lim('k')).toBe(false);
     t = 1001;
     expect(lim('k')).toBe(true);
+    expect(lim('probe', false)).toBe(true); // check only: records nothing
+    for (let i = 0; i < 50; i++) lim(`spoof-${i}`);
+    t = 5000;
+    lim('k');
+    expect(lim.size()).toBe(1); // expired keys are pruned
   });
 });

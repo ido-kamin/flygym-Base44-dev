@@ -368,8 +368,10 @@ export class BrainRenderer {
     this.points.material.dispose();
     this.tracts.geometry.dispose();
     this.tracts.material.dispose();
+    this.bloom.dispose();
     this.composer.dispose();
     this.renderer.dispose();
+    this.renderer.forceContextLoss();
     this.renderer.domElement.remove();
   }
 }

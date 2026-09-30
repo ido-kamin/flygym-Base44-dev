@@ -22,8 +22,8 @@ services:
     command:
       - sh
       - -ec
-      # build once, keep rebuilding on edits (Base44 editor), serve dist/ + /api
-      - npm ci --no-audit --no-fund && npm run build && (npx vite build --watch > /tmp/vite-watch.log 2>&1 &) && exec node server/index.mjs
+      # build once, keep rebuilding on edits (Base44 editor) without emptying dist/ (the page keeps working mid-rebuild), serve dist/ + public/ data + /api
+      - npm ci --no-audit --no-fund && npm run build && (npx vite build --watch --emptyOutDir false > /tmp/vite-watch.log 2>&1 &) && exec node server/index.mjs
     healthcheck:
       test:
         - CMD

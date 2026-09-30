@@ -114,20 +114,26 @@ function makeLabel(text, highlight, heightMm = 0.5) {
   return sprite;
 }
 
-/** A simple procedural spider: two body parts and eight two-segment legs. */
-function makeSpider(material, legMaterial) {
-  const g = new THREE.Group();
-  const ceph = new THREE.Mesh(new THREE.SphereGeometry(0.75, 20, 14), material);
-  ceph.scale.set(1.1, 0.7, 1);
-  ceph.position.set(0.55, 0.9, 0);
-  const abd = new THREE.Mesh(new THREE.SphereGeometry(1.05, 20, 14), material);
-  abd.scale.set(1.25, 0.85, 1);
-  abd.position.set(-1.1, 1.1, 0);
-  g.add(ceph, abd);
+/** Spider geometry, built once per world and shared by every spider. */
+function spiderGeometry() {
   const femur = new THREE.CylinderGeometry(0.09, 0.11, 1.9, 6);
   femur.translate(0, 0.95, 0);
   const tibia = new THREE.CylinderGeometry(0.05, 0.09, 2.6, 6);
   tibia.translate(0, 1.3, 0);
+  return { ceph: new THREE.SphereGeometry(0.75, 20, 14), abd: new THREE.SphereGeometry(1.05, 20, 14), femur, tibia };
+}
+
+/** A simple procedural spider: two body parts and eight two-segment legs. */
+function makeSpider(geo, material, legMaterial) {
+  const g = new THREE.Group();
+  const ceph = new THREE.Mesh(geo.ceph, material);
+  ceph.scale.set(1.1, 0.7, 1);
+  ceph.position.set(0.55, 0.9, 0);
+  const abd = new THREE.Mesh(geo.abd, material);
+  abd.scale.set(1.25, 0.85, 1);
+  abd.position.set(-1.1, 1.1, 0);
+  g.add(ceph, abd);
+  const { femur, tibia } = geo;
   const legs = [];
   for (let side = -1; side <= 1; side += 2) {
     for (let k = 0; k < 4; k++) {
@@ -314,6 +320,7 @@ export class FlyBody3D {
     this.spiderMat = new THREE.MeshStandardMaterial({ color: 0x1b1a19, roughness: 0.55 });
     this.spiderLegMat = new THREE.MeshStandardMaterial({ color: 0x2b2826, roughness: 0.6 });
     this.spiderObjs = new Map();
+    this.spiderGeo = spiderGeometry();
     this.rings = [];
     this.ringGeom = new THREE.RingGeometry(0.9, 1, 48);
     this.ringGeom.rotateX(-Math.PI / 2);
@@ -391,7 +398,8 @@ export class FlyBody3D {
    * @param {Float32Array} activity  smoothed cluster activity
    */
   frame(dt, game, activity) {
-    const h = dt * this.playback;
+    // dt is already world time (the caller applies the time scale)
+    const h = dt;
     this.time += h;
     const f = game.fly;
     const behaviour = game.behaviour;
@@ -528,7 +536,7 @@ export class FlyBody3D {
       seen.add(p);
       let g = this.spiderObjs.get(p);
       if (!g) {
-        g = makeSpider(this.spiderMat, this.spiderLegMat);
+        g = makeSpider(this.spiderGeo, this.spiderMat, this.spiderLegMat);
         g.traverse((o) => {
           if (o.isMesh) o.castShadow = true;
         });
@@ -572,6 +580,8 @@ export class FlyBody3D {
     this.renderer.domElement.removeEventListener('pointerdown', this.onPointerDown);
     this.renderer.domElement.removeEventListener('pointerup', this.onPointerUp);
     this.controls.dispose();
+    for (const geo of Object.values(this.spiderGeo)) geo.dispose();
+    this.ringGeom.dispose();
     this.scene.traverse((o) => {
       if (o.geometry) o.geometry.dispose();
       if (o.material) {
@@ -580,6 +590,7 @@ export class FlyBody3D {
       }
     });
     this.renderer.dispose();
+    this.renderer.forceContextLoss();
     this.renderer.domElement.remove();
   }
 }

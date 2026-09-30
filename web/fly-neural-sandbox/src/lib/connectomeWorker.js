@@ -4,6 +4,8 @@
 // in:  {type:'init', buffer}                 gunzipped connectome file (transferred)
 //      {type:'drive', rates:{group: Hz}}     continuous sensory drive (light, looming, touch)
 //      {type:'trial', name}                  a stimulus trial from TRIALS (taste, smell)
+//      {type:'speed', scale}                 brain ms per wall ms (slow motion)
+//      {type:'pause', paused}                stop simulating while the tab is hidden
 // out: {type:'ready', n, nnz, cluster (Uint8 per neuron), header}
 //      {type:'frame', activity (Uint8 per neuron), clusters (Hz x16), groups {name: Hz}, stats}
 
@@ -13,6 +15,9 @@ let brain = null;
 let groups = null;
 let driveGroups = null;
 let trial = null; // {name, group, until}
+let speed = 1; // brain ms per wall ms (slow motion)
+let paused = false;
+let looping = false; // a loop() is scheduled
 const FRAME_MS = 50; // post activity ~20x per second
 const BUDGET_MS = 12; // simulate in slices so messages get through
 
@@ -48,6 +53,9 @@ function init(buffer) {
     },
     [cluster.buffer],
   );
+  wallAtFrame = performance.now();
+  simAtFrame = brain.t;
+  lastFrame = wallAtFrame;
   loop();
 }
 
@@ -81,9 +89,11 @@ let simAtFrame = 0;
 let wallAtFrame = 0;
 const clusters = new Float32Array(16);
 function loop() {
+  looping = !paused;
+  if (paused) return;
   const start = performance.now();
-  // run no faster than real time
-  const target = start - wallAtFrame + simAtFrame;
+  // run no faster than (scaled) real time
+  const target = (start - wallAtFrame) * speed + simAtFrame;
   while (performance.now() - start < BUDGET_MS && brain.t < target + 5) {
     brain.step();
     if (trial && brain.t >= trial.until) endTrial();
@@ -117,7 +127,7 @@ function loop() {
         },
         stats: {
           simMs: brain.t,
-          rtf: wall > 0 ? sim / wall : 0,
+          rtf: wall > 0 ? sim / wall / speed : 0,
           spikesPerSec: sim > 0 ? (brain.spikesThisWindow * 1000) / sim : 0,
           active: brain.activeCount,
           trial: trial?.name ?? null,
@@ -139,4 +149,18 @@ self.onmessage = (e) => {
   else if (!brain) return;
   else if (msg.type === 'drive') setDrive(msg.rates);
   else if (msg.type === 'trial') startTrial(msg.name);
+  else if (msg.type === 'speed') {
+    // restart the pacing window so the new rate applies from now
+    speed = Math.max(0.05, msg.scale);
+    wallAtFrame = performance.now();
+    simAtFrame = brain.t;
+  } else if (msg.type === 'pause' && msg.paused !== paused) {
+    paused = msg.paused;
+    if (!paused) {
+      wallAtFrame = performance.now();
+      simAtFrame = brain.t;
+      brain.spikesThisWindow = 0;
+      if (!looping) loop();
+    }
+  }
 };
