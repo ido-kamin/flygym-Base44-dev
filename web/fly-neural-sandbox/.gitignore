@@ -1,0 +1,5 @@
+node_modules/
+dist/
+# the repo-root .gitignore (Python template) ignores every lib/ directory;
+# this app's source lives in src/lib/
+!src/lib/

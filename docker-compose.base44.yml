@@ -1,0 +1,40 @@
+# Base44 runtime for the Fly Neural Sandbox game (web/fly-neural-sandbox).
+# `/` serves the game; the flygym docs are no longer the home page.
+services:
+  web:
+    build:
+      context: .
+      dockerfile: .base44/Dockerfile
+    working_dir: /app/web/fly-neural-sandbox
+    volumes:
+      - .:/app
+      - node-modules:/app/web/fly-neural-sandbox/node_modules
+    environment:
+      PORT: "3000"
+      # Real Base44 app creation ("the fly ships an app"). Unset = hand-off link only.
+      BASE44_API_TOKEN: ${BASE44_API_TOKEN:-}
+      BASE44_API_URL: ${BASE44_API_URL:-https://app.base44.com}
+      BASE44_ORGANIZATION_ID: ${BASE44_ORGANIZATION_ID:-}
+      FLY_APPS_DAILY_CAP: ${FLY_APPS_DAILY_CAP:-25}
+      PUBLIC_URL: ${PUBLIC_URL:-}
+    ports:
+      - "3000:3000"
+    command:
+      - sh
+      - -ec
+      # build once, keep rebuilding on edits (Base44 editor) without emptying dist/ (the page keeps working mid-rebuild), serve dist/ + public/ data + /api
+      - npm ci --no-audit --no-fund && npm run build && (npx vite build --watch --emptyOutDir false > /tmp/vite-watch.log 2>&1 &) && exec node server/index.mjs
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:3000/api/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
+      interval: 20s
+      timeout: 5s
+      start_period: 180s
+      retries: 3
+    restart: on-failure
+
+volumes:
+  node-modules:
