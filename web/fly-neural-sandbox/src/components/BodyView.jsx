@@ -19,7 +19,8 @@ const SPEEDS = [
  * by FlyBody3D) plus what the fly is doing and the time-scale control.
  */
 export default function BodyView({ ref, status, playback, onPlayback, behaviour, byBrain, motorMode, armed }) {
-  const b = BEHAVIOUR[behaviour] ?? BEHAVIOUR.explore;
+  // neurons only: walking is DNp09's doing, not the fly's autopilot
+  const b = (motorMode === 'neurons' && behaviour === 'explore' ? BEHAVIOUR.walk : BEHAVIOUR[behaviour]) ?? BEHAVIOUR.explore;
   return (
     <section
       className={`relative min-h-[56vh] flex-1 overflow-hidden rounded-xl border bg-void lg:min-h-0 ${armed ? 'border-rose-500' : 'border-white/[0.07]'}`}
