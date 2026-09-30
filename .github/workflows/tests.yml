@@ -73,3 +73,30 @@ jobs:
         # selection) to drop the groups CI can't run: warp needs a CUDA GPU.
         # Rendering tests are gated separately via SKIP_RENDERING_TESTS above.
         run: uv run pytest tests/ -m "not warp" -v --tb=short
+
+  test-web:
+    name: Web app tests (fly-neural-sandbox)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web/fly-neural-sandbox
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          # vitest 5 requires Node ^22.12
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/fly-neural-sandbox/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run unit tests
+        run: npm test
+
+      - name: Build
+        run: npm run build
