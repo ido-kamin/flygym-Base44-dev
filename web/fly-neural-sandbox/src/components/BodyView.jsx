@@ -20,7 +20,15 @@ const SPEEDS = [
  */
 export default function BodyView({ ref, status, playback, onPlayback, behaviour, byBrain, motorMode, armed }) {
   // neurons only: walking is DNp09's doing, not the fly's autopilot
-  const b = (motorMode === 'neurons' && behaviour === 'explore' ? BEHAVIOUR.walk : BEHAVIOUR[behaviour]) ?? BEHAVIOUR.explore;
+  const base = (motorMode === 'neurons' && behaviour === 'explore' ? BEHAVIOUR.walk : BEHAVIOUR[behaviour]) ?? BEHAVIOUR.explore;
+  const b = motorMode === 'hybrid' ? { ...base, note: {
+    explore: 'short walking bouts + neural responses',
+    forage: 'approaching nearby food',
+    stand: 'pausing to sample its surroundings',
+    feed: 'stopping to feed',
+    flee: 'escape response + assisted take-off',
+    groom: 'cleaning its antennae',
+  }[behaviour] } : base;
   return (
     <section
       className={`relative min-h-[56vh] flex-1 overflow-hidden rounded-xl border bg-void lg:min-h-0 ${armed ? 'border-rose-500' : 'border-white/[0.07]'}`}
@@ -33,9 +41,9 @@ export default function BodyView({ ref, status, playback, onPlayback, behaviour,
           <span className={`size-2 rounded-full ${b.dot} ${behaviour === 'flee' ? 'animate-ping' : ''}`} />
           <span className="text-sm font-semibold text-white">{b.text}</span>
           <span className="hidden text-xs text-neutral-400 sm:inline">{b.note}</span>
-          {byBrain && (
+          {(byBrain || motorMode === 'hybrid') && (
             <span className="ml-1 hidden rounded bg-white/[0.07] px-1.5 py-0.5 text-[10px] font-medium text-neutral-300 sm:inline">
-              {motorMode === 'neurons' ? 'neurons only' : 'FlyWire brain + autopilot'}
+              {motorMode === 'neurons' ? 'neurons only' : motorMode === 'hybrid' ? (byBrain ? 'brain + lifelike assistance' : 'lifelike assistance · brain loading') : 'FlyWire brain + autopilot'}
             </span>
           )}
         </div>

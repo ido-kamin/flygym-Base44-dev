@@ -1,9 +1,9 @@
 // Deterministic game world: the fly, sugar, predators, energy and score.
 //
-// The fly has no hand-written steering. Each fixed step it samples the world
-// with two antennae (sugar odour) and two eyes (looming predators and walls),
-// feeds that into the Connectome, and moves according to the connectome's
-// motor readout. The genome therefore *is* the behaviour.
+// Each fixed step samples the world with two antennae (sugar odour) and two
+// eyes (looming predators and walls), then feeds that into the Connectome.
+// Movement can use the genome model, FlyWire motor readouts alone, or explicit
+// hybrid behavioral assistance (see hybridBehavior.js).
 //
 // On top of that sit the fly's survival instincts, as timed motor programs:
 // escape (giant-fiber burst away from a looming threat), feeding (the fly stops
@@ -15,9 +15,11 @@
 // motorMode 'neurons': the fly moves ONLY from the FlyWire brain's descending
 // neurons (DNp09 walk, DNa02 turn, DNp01 escape, motor neurons feed, DNg groom);
 // the genome model, noise and scripted instincts are off. 'assist' (default)
-// adds the genome model's steering and the instincts on top.
+// adds the genome model's steering and the instincts on top. 'hybrid' adds
+// explicit lifelike behavioral assistance while retaining neural responses.
 
 import { ARENA, MAX_SCORE } from './constants.js';
+import { HybridBehavior } from './hybridBehavior.js';
 import { encodeFlyToBase44 } from './base44.js';
 import { C, CLUSTER_COUNT, Connectome } from './connectome.js';
 import {
@@ -92,7 +94,7 @@ const ESCAPE_SPEED = 1.7; // x MAX_SPEED, in the air
 const MEAL_TIME = 1.2;
 /** What the fly is doing, for the HUD. */
 export const BEHAVIOURS = ['explore', 'forage', 'flee', 'feed', 'groom', 'stand'];
-export const MOTOR_MODES = ['assist', 'neurons'];
+export const MOTOR_MODES = ['assist', 'neurons', 'hybrid'];
 const TAU = Math.PI * 2;
 
 const wrapAngle = (a) => Math.atan2(Math.sin(a), Math.cos(a));
@@ -175,6 +177,7 @@ export class Game {
       groomCooldown: 4,
       wallCooldown: 0,
     };
+    this.hybrid = new HybridBehavior(this.seed, this.fly.theta);
     this.behaviour = 'explore';
     const initial = MISSIONS[this.mission]?.search ? 1 : this.foodTarget();
     for (let i = 0; i < initial; i++) this.spawnSugar();
@@ -354,6 +357,11 @@ export class Game {
         turnCmd = 0;
         vTarget = 0;
       }
+    } else if (this.motorMode === 'hybrid') {
+      const assisted = this.hybrid.step(h, this);
+      turnCmd = assisted.turn;
+      vTarget = MAX_SPEED * assisted.speed;
+      if (fly.escapeTimer === 0 && fly.feedTimer === 0 && fly.groomTimer === 0) this.behaviour = this.hybrid.behaviour;
     } else {
       turnCmd = turn + chaos * 1.1 * this.noise + (bm ? bm.turn * 0.6 : 0);
       const locomotor = 0.3 + 0.7 * norm(w[G.speed]);
@@ -364,6 +372,8 @@ export class Game {
       // in the air: the take-off direction fades into the brain's own steering
       const u = fly.escapeTimer / ESCAPE_TIME;
       turnCmd = fly.escapeTurn * u + (bm ? bm.turn * 0.6 : 0) * (1 - u);
+      // Hybrid escape is a short pivot then a straight burst, not a full circular turn.
+      if (this.motorMode === 'hybrid') turnCmd = fly.escapeTimer > ESCAPE_TIME - 0.18 ? fly.escapeTurn : 0;
       vTarget = MAX_SPEED * ESCAPE_SPEED;
       vRate = 14;
     } else if (fly.feedTimer > 0 || fly.groomTimer > 0) {
@@ -391,7 +401,7 @@ export class Game {
     // metabolism: a baseline cost plus a speed^2 cost that scales with the drive gene
     const vn = fly.v / MAX_SPEED;
     // neurons mode: a gentler metabolism (a live fly lasts minutes, not seconds, between meals)
-    this.energy -= h * (neurons ? 0.3 + 0.5 * vn * vn : 0.9 + 2.2 * vn * vn * (0.5 + norm(w[G.speed])));
+    this.energy -= h * (neurons || this.motorMode === 'hybrid' ? 0.3 + 0.5 * vn * vn : 0.9 + 2.2 * vn * vn * (0.5 + norm(w[G.speed])));
     if (MISSIONS[this.mission]?.sandbox) this.energy = Math.max(this.energy, 40); // can't starve in the sandbox
     if (this.energy <= 0) {
       this.energy = 0;
@@ -647,7 +657,7 @@ export class Game {
     const gain = fed ? 0 : 10 * (0.5 + reward); // (neurons mode: already gained while feeding)
     // proboscis extension: the fly stops to feed
     // (neurons mode: it has just fed for as long as its motor neurons fired)
-    this.fly.feedTimer = this.motorMode === 'neurons' ? 0 : FEED_TIME;
+    this.fly.feedTimer = this.motorMode === 'neurons' ? 0 : this.motorMode === 'hybrid' ? 1.2 : FEED_TIME;
     this.fly.feedTime = 0;
     this.fly.groomTimer = 0;
     this.energy = Math.min(MAX_ENERGY, this.energy + gain);

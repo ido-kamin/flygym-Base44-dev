@@ -81,6 +81,7 @@ export function motorFromGroups(G, state, controls, dt, memory = null) {
   const turn = Math.max(-1, Math.min(1, (diff - state.turnBaseline) / MOTOR_SCALE.turn));
   return {
     turn,
+    steering: (controls.steerL ?? 0) > 0 || (controls.steerR ?? 0) > 0,
     walk: Math.min(1, G.walk / MOTOR_SCALE.walk),
     escape: Math.max(G.escapeL, G.escapeR) > MOTOR_SCALE.escape,
     escapeSide: G.escapeL > G.escapeR ? -1 : 1,

@@ -18,10 +18,11 @@ export default function NeuralControls({ mode, onMode, explore, onExplore, onSte
   });
   return (
     <section data-testid="neural-controls" className="rounded-xl border border-white/[0.07] bg-panel p-3">
-      <div className="flex items-center justify-between gap-2">
+      <div className="flex flex-wrap items-center justify-between gap-2">
         <h3 className="text-[13px] font-semibold text-white">Drive its neurons</h3>
         <div className="flex gap-0.5 rounded-md bg-void p-0.5" role="group" aria-label="Movement source">
           {[
+            ['hybrid', 'Lifelike hybrid'],
             ['neurons', 'Neurons only'],
             ['assist', 'Autopilot'],
           ].map(([k, label]) => (
@@ -41,6 +42,8 @@ export default function NeuralControls({ mode, onMode, explore, onExplore, onSte
       <p className="mt-1 text-[11px] leading-snug text-neutral-500">
         {mode === 'neurons'
           ? 'It moves on its own: hunger drives its walk neurons, its own spontaneous activity turns it, its eyes, antennae and taste do the rest. You can add stimulation, like optogenetics.'
+          : mode === 'hybrid'
+            ? 'Behavioral rules add walking bouts, pauses, food-seeking and wall avoidance. Live neural signals influence movement and trigger responses; this is not neurons-only behavior.'
           : 'The genome model steers to food and tasks; the FlyWire brain still fires the escapes and feeding.'}
       </p>
 
