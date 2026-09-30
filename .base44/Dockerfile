@@ -1,4 +1,5 @@
-FROM python:3.12-slim
-RUN apt-get update && apt-get install -y --no-install-recommends libegl1 libgl1 && rm -rf /var/lib/apt/lists/*
-COPY --from=ghcr.io/astral-sh/uv:0.11.14 /uv /usr/local/bin/uv
-WORKDIR /app
+FROM node:22-bookworm-slim
+
+# Only the runtime lives in the image; the source is bind-mounted.
+# The game (web/fly-neural-sandbox) is built and served by its own Node server.
+WORKDIR /app/web/fly-neural-sandbox

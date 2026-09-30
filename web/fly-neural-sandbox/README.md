@@ -1,11 +1,11 @@
 # Fly Neural Sandbox
 
-A browser game built with React, Tailwind CSS and Three.js. A virtual fruit fly hunts sugar (or, in the **Vibecode · Base** theme, `[Compile]` `[Audit]` `[Mint]` `[Deploy]` `[Base]` tokens) and dodges spiders. Its behaviour comes entirely from a small Sensory → Intrinsic → Motor connectome, and a 24-bit genome sets the strength of that connectome's connections.
+A browser game built with React, Tailwind CSS and Three.js. A virtual fruit fly roams an arena on its own, hunts sugar (or mission tokens: Base44 builder tasks, web results, `[Compile]` `[Audit]` `[Mint]` `[Deploy]` `[Base]`) and escapes spiders. It is driven by the **whole FlyWire brain** (138,639 neurons, simulated live in a Web Worker) plus a small genome-controlled Sensory → Intrinsic → Motor model that gives each fly its personality.
 
 Three linked views:
-- **Brain:** 139,255 brain neurons (FlyWire) and 22,300 nerve-cord neurons (MANC) fire in 3D. Reward (dopamine) waves fire when the fly eats, and fear waves when a spider strikes.
-- **Body:** the real **NeuroMechFly v2** body from this repo walks with flygym's CPG, and its legs glow with the nerve-cord neuromeres that drive them.
-- **Playground:** the 2D arena (a fly-driven browser in the Vibecode theme).
+- **World (hero):** the real **NeuroMechFly v2** body from this repo walks a 3D arena with flygym's CPG, at the game's position and heading. Its survival programs show on the body: a giant-fiber escape jump, stopping to feed, rubbing its front legs to groom.
+- **Brain:** each of the 139,255 brain points is lit by the live firing rate of a real FlyWire neuron of its region; 22,300 nerve-cord points (MANC) follow the legs' CPG. The panel shows spikes/s, active neurons, the real-time factor and the descending-neuron readouts.
+- **Mission map:** the top-down arena inside a small fly-driven browser window.
 
 The whole fly is serialized into a 10-character, URL-safe **Base44** DNA string in the page hash, so a shared link respawns the same fly.
 
@@ -118,7 +118,32 @@ Positions are procedural, but every region's count comes from the published FlyW
 | **Brain total** | **139,255** | |
 | VNC | 22,300 | MANC; the split across neuromeres is approximate |
 
-FlyWire data is CC BY-NC 4.0, so this app ships only these published counts. Real FlyWire neuron coordinates could be baked in, but only with FlyWire's permission for the intended (commercial) use.
+## The real brain (FlyWire v783, LIF)
+
+`public/connectome/flywire783.bin.gz` (7.7 MB) packs the FlyWire v783 connectome as used by Shiu et al. 2024: 138,639 neurons and the 2,700,513 connections of 5 or more synapses (FlyWire's standard threshold), with signed synapse counts (GABA/glutamate inhibitory). `scripts/prep_flywire_connectome.py` builds it from the model's `Completeness_783.csv` / `Connectivity_783.parquet` and the FlyWire annotation table, and records the neuron groups the game reads and writes.
+
+`src/lib/lifBrain.js` integrates the published leaky integrate-and-fire model (v0 −52 mV, threshold −45 mV, τm 20 ms, τsyn 5 ms, 2.2 ms refractory, 1.8 ms delay, 0.275 mV per synapse, Poisson inputs of 250 × w) with forward Euler at 1 ms, event-driven (only neurons with input or not yet at rest are updated). A unit test checks it against a dense integration of the same equations, and against the published circuits on the real data.
+
+| The fly senses | Sensory neurons (Poisson drive) |
+|---|---|
+| light and image motion on each eye | R1-6 / R7 / R8 photoreceptors, 6–30 Hz |
+| a spider looming on the left / right | LPLC2 + LC4, up to 140 Hz |
+| bumping into a wall | mechanosensory neurons, 60 Hz |
+| sugar on the proboscis | sugar GRNs, 200 Hz (a 0.4 s trial) |
+| a new scent | ORNs of one antenna, 30 Hz (a 0.25 s trial) |
+
+| Descending / motor neurons | Behaviour |
+|---|---|
+| DNp01 (giant fiber) > 40 Hz | escape jump away from the leading side |
+| DNa02 (+ DNa01) left − right, high-passed | steering |
+| brain motor neurons > 5 Hz | keep feeding |
+| DNg11 / DNg12_a > 12 Hz | groom |
+
+Smell and taste run as trials that end by returning the network to rest, as the published model is run: in this model (no spike-frequency adaptation, no graded APL inhibition) the antennal-lobe / mushroom-body / lateral-horn loop keeps firing after a smell or taste ends, at about 480k spikes/s. The same happens with the full, unthresholded graph, so this comes from the model, not from dropping weak connections.
+
+Speed: about real time at rest and with light or looming (1–4×), and 0.3× during a taste trial on a laptop CPU.
+
+**Licence:** FlyWire connectome data is © the FlyWire Consortium, licensed **CC BY-NC 4.0** (non-commercial use, with attribution): Dorkenwald et al., *Nature* 2024; Schlegel et al., *Nature* 2024; FlyWire guidelines at https://flywire.ai. Model: Shiu et al., *Nature* 2024, code MIT (https://github.com/philshiu/Drosophila_brain_model). Hosting this app commercially needs FlyWire's permission.
 
 ## Vibecode · Base theme
 
@@ -160,7 +185,7 @@ It deploys `contracts/FlyCoin.sol` from the visitor's own wallet over EIP-1193 (
   - Spiders have gait and threat rings.
   - Antenna and eye sensory rays are drawn, and the fly's current DNA grid cell is highlighted.
 
-**Honesty note**: neuron positions are *procedural*. They are shapes placed where the real neuropils are, with FlyWire's per-region neuron counts, and they are not FlyWire morphology. The 16-cluster network is a didactic rate model, not the real synaptic connectome. Running a real FlyWire leaky integrate-and-fire (LIF) brain in the browser is feasible: open-source Web Worker and WebGPU ports exist. It would be the next step, subject to FlyWire's licence.
+**Honesty note**: neuron *positions* are procedural. They are shapes placed where the real neuropils are, with FlyWire's per-region neuron counts, and they are not FlyWire morphology; each point is lit by a real FlyWire neuron of the same region. Behaviour mixes the real LIF brain (escape, steering, feeding, grooming) with the 16-region genome model (odour steering, speed, personality), because the LIF model has no forward-walking command (DNp09 stays silent) and no learning.
 
 ## Layout
 
@@ -172,7 +197,11 @@ src/
     base44.js            DNA codec (pure)
     genome.js            genes, mutation, personality, PRNG (pure)
     connectome.js        16-cluster network + motor readout (pure)
-    game.js              deterministic world: fly, sugar, predators, energy (pure)
+    game.js              deterministic world: fly, sugar, predators, energy, instincts (pure)
+    lifBrain.js          FlyWire whole-brain LIF model + connectome decoder (pure)
+    connectomeWorker.js  runs lifBrain in a Web Worker
+    realBrain.js         main-thread client: senses in, motor commands out
+    flyBody3D.js         NeuroMechFly 3D world: arena, sugar, spiders, chase camera
     brainGeometry.js     seeded procedural anatomy + tracts (pure)
     brainShaders.js      GLSL
     brainRenderer.js     Three.js scene

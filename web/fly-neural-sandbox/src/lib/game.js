@@ -4,6 +4,13 @@
 // with two antennae (sugar odour) and two eyes (looming predators and walls),
 // feeds that into the Connectome, and moves according to the connectome's
 // motor readout. The genome therefore *is* the behaviour.
+//
+// On top of that sit the fly's survival instincts, as timed motor programs:
+// escape (giant-fiber burst away from a looming threat), feeding (the fly stops
+// while the proboscis is on sugar), grooming (a pause to clean the antennae
+// after a bump or when idle and fed), and hunger, which sharpens the odour
+// drive. The real FlyWire brain (realBrain.js), when loaded, can steer and
+// trigger these programs through `brainMotor`.
 
 import { ARENA, MAX_SCORE } from './constants.js';
 import { encodeFlyToBase44 } from './base44.js';
@@ -24,6 +31,33 @@ const MAX_STEPS_PER_ADVANCE = 24;
 export const FLY_RADIUS = 16;
 /** Vibecode theme: food items are pipeline tokens; collect them in this order to deploy. */
 export const PIPELINE = ['Compile', 'Audit', 'Mint', 'Deploy', 'Base'];
+/** Base44 builder mission: the tasks of building an app, in order; the last one ships it. */
+export const BUILD_TASKS = ['Add page', 'Add entity', 'Connect login', 'Design UI', 'Add function', 'Publish'];
+
+/**
+ * Missions: what the fly's food items are. Ordered missions (`stages`) advance
+ * when the fly eats the next stage and complete with `doneEvent`; the search
+ * mission's items are real web results (see setSearchResults).
+ */
+export const MISSIONS = {
+  forage: { stages: null, doneEvent: null },
+  build: { stages: BUILD_TASKS, doneEvent: 'shipped' },
+  search: { stages: null, doneEvent: null, search: true },
+  vibe: { stages: PIPELINE, doneEvent: 'deployed' },
+};
+export const SEARCH_TOKEN = 'Search';
+
+/** Which cluster activity marks each gene's pathway as "in use" (training credit). */
+const GENE_SOURCES = [
+  [C.MB_L, C.MB_R], // food: mushroom bodies
+  [C.LH_L, C.LH_R], // fear: lateral horn
+  [C.PAM], // reward: dopamine
+  [C.CX], // steer: central complex
+  [C.DN], // speed: descending neurons
+  null, // noise: the chaos loop itself (|noise|)
+];
+const ELIGIBILITY_TAU = 2.0; // s
+const TRAINING_RATE = 2.2;
 const WALL_MARGIN = 20;
 export const MAX_SPEED = 300; // world units / s at full locomotor drive and full DN
 export const MAX_TURN = 5.5; // rad / s
@@ -38,6 +72,13 @@ const MAX_ENERGY = 100;
 const TRAIL_EVERY = 0.035;
 const TRAIL_LENGTH = 90;
 const ANTENNA_SPREAD = 0.65; // rad either side of the heading
+const FEED_TIME = 0.5; // s the fly stops on each sugar
+const FEED_MAX = 1.5; // s, while the real brain's feeding motor neurons keep firing
+const GROOM_TIME = 1.6; // s
+const ESCAPE_TIME = 0.45; // s of giant-fiber burst
+const ESCAPE_SPEED = 1.5; // x MAX_SPEED
+/** What the fly is doing, for the HUD. */
+export const BEHAVIOURS = ['explore', 'forage', 'flee', 'feed', 'groom'];
 const TAU = Math.PI * 2;
 
 const wrapAngle = (a) => Math.atan2(Math.sin(a), Math.cos(a));
@@ -52,7 +93,12 @@ export class Game {
     this.network = new Connectome();
     this.input = new Float32Array(CLUSTER_COUNT);
     this.events = [];
-    this.sensors = { odorL: 0, odorR: 0, loomL: 0, loomR: 0 };
+    this.sensors = { odorL: 0, odorR: 0, loomL: 0, loomR: 0, threatL: 0, threatR: 0 };
+    /**
+     * Optional motor command from the real brain, set by the caller each frame:
+     * {turn -1..1, escape, escapeSide, feed, groom}. null = connectome model only.
+     */
+    this.brainMotor = null;
     this.nextPredatorId = 1;
     if (dna) this.loadDNA(dna);
     else this.reset(seed, DEFAULT_WEIGHTS.slice(), 0);
@@ -75,8 +121,12 @@ export class Game {
     this.trailClock = 0;
     this.predators = [];
     this.sugars = [];
-    this.pipeline = 0; // index of the next PIPELINE stage the fly needs
-    this.deployments = 0;
+    this.mission = this.mission ?? 'forage';
+    this.pipeline = 0; // index of the next stage the fly needs (ordered missions)
+    this.deployments = 0; // completed ordered missions (vibe: deployments, build: shipped apps)
+    this.searchResults = []; // queued web results for the search mission
+    this.eligibility = new Float32Array(6);
+    this.plasticity = new Float32Array(6);
     this.fly = {
       x: pose ? pose.x : ARENA.w / 2,
       y: pose ? pose.y : ARENA.h / 2,
@@ -87,8 +137,17 @@ export class Game {
       wing: 0,
       hitCooldown: 0,
       escapeCooldown: 0,
+      escapeTimer: 0,
+      escapeTurn: 0,
+      feedTimer: 0,
+      feedTime: 0,
+      groomTimer: 0,
+      groomCooldown: 4,
+      wallCooldown: 0,
     };
-    for (let i = 0; i < SUGAR_TARGET; i++) this.spawnSugar();
+    this.behaviour = 'explore';
+    const initial = MISSIONS[this.mission]?.search ? 1 : this.foodTarget();
+    for (let i = 0; i < initial; i++) this.spawnSugar();
     this.generation = generationOf(this.score);
   }
 
@@ -149,11 +208,13 @@ export class Game {
 
   spawnSugar() {
     const m = 50;
+    const result = MISSIONS[this.mission]?.search ? this.searchResults.shift() : undefined;
     for (let tries = 0; tries < 20; tries++) {
       const x = m + this.rng() * (ARENA.w - 2 * m);
       const y = m + this.rng() * (ARENA.h - 2 * m);
       if (Math.hypot(x - this.fly.x, y - this.fly.y) > 110 || tries === 19) {
-        this.sugars.push({ x, y, phase: this.rng() * TAU, age: 0, kind: this.nextKind() });
+        const kind = result ? result.title : this.nextKind();
+        this.sugars.push({ x, y, phase: this.rng() * TAU, age: 0, kind, result });
         return;
       }
     }
@@ -161,7 +222,34 @@ export class Game {
 
   /** Token kind for a new food item: the stage the fly needs next is over-represented. */
   nextKind() {
-    return this.rng() < 0.4 ? PIPELINE[this.pipeline] : PIPELINE[Math.floor(this.rng() * PIPELINE.length)];
+    const stages = MISSIONS[this.mission]?.stages;
+    if (stages) return this.rng() < 0.4 ? stages[this.pipeline] : stages[Math.floor(this.rng() * stages.length)];
+    if (MISSIONS[this.mission]?.search) return SEARCH_TOKEN;
+    return null;
+  }
+
+  /** Switch mission: resets the pipeline and respawns the food items for it. */
+  setMission(mission) {
+    if (!MISSIONS[mission]) throw new Error(`unknown mission ${mission}`);
+    this.mission = mission;
+    this.pipeline = 0;
+    this.searchResults = [];
+    this.sugars = [];
+    const initial = MISSIONS[mission].search ? 1 : this.foodTarget();
+    for (let i = 0; i < initial; i++) this.spawnSugar();
+    this.events.push({ type: 'mission', mission });
+  }
+
+  foodTarget() {
+    return MISSIONS[this.mission]?.search ? 7 : SUGAR_TARGET;
+  }
+
+  /** Search mission: web results become food items (the fly "reads" them by eating). */
+  setSearchResults(query, results) {
+    this.searchResults = results.slice(0, 6).map((r) => ({ ...r, query }));
+    this.sugars = this.sugars.filter((s) => s.kind === SEARCH_TOKEN).slice(0, 1);
+    while (this.searchResults.length) this.spawnSugar();
+    this.events.push({ type: 'results', query, count: results.length });
   }
 
   /** Events since the last drain (eat, hit, fire, pulse, ...), for the renderers. */
@@ -196,8 +284,10 @@ export class Game {
 
     const inp = this.input;
     inp.fill(0);
-    inp[C.AL_L] = s.odorL;
-    inp[C.AL_R] = s.odorR;
+    // hunger sharpens the odour drive
+    const appetite = 0.7 + 0.8 * hunger;
+    inp[C.AL_L] = s.odorL * appetite;
+    inp[C.AL_R] = s.odorR * appetite;
     inp[C.OL_L] = s.loomL;
     inp[C.OL_R] = s.loomR;
     inp[C.PROTO] = 0.1 + 0.5 * hunger + chaos * 0.5 * Math.abs(this.noise);
@@ -206,13 +296,24 @@ export class Game {
     this.network.step(h, inp, this.events);
 
     const { turn, drive } = this.network.motor(w);
-    const turnCmd = turn + chaos * 1.1 * this.noise;
+    const bm = this.brainMotor;
+    this.instincts(h, bm, hunger);
+    let turnCmd = turn + chaos * 1.1 * this.noise + (bm ? bm.turn * 0.6 : 0);
+    const locomotor = 0.3 + 0.7 * norm(w[G.speed]);
+    let vTarget = MAX_SPEED * locomotor * (0.25 + 0.75 * drive);
+    let vRate = 4;
+    if (fly.escapeTimer > 0) {
+      turnCmd = fly.escapeTurn;
+      vTarget = MAX_SPEED * ESCAPE_SPEED;
+      vRate = 14;
+    } else if (fly.feedTimer > 0 || fly.groomTimer > 0) {
+      turnCmd = 0;
+      vTarget = 0;
+      vRate = 10;
+    }
     fly.omega += (turnCmd * MAX_TURN - fly.omega) * Math.min(1, h * 10);
     fly.theta = wrapAngle(fly.theta + fly.omega * h);
-
-    const locomotor = 0.3 + 0.7 * norm(w[G.speed]);
-    const vTarget = MAX_SPEED * locomotor * (0.25 + 0.75 * drive);
-    fly.v += (vTarget - fly.v) * Math.min(1, h * 4);
+    fly.v += (vTarget - fly.v) * Math.min(1, h * vRate);
     fly.x += Math.cos(fly.theta) * fly.v * h;
     fly.y += Math.sin(fly.theta) * fly.v * h;
     this.collideWalls();
@@ -222,15 +323,10 @@ export class Game {
     fly.hitCooldown = Math.max(0, fly.hitCooldown - h);
     fly.escapeCooldown = Math.max(0, fly.escapeCooldown - h);
 
-    // giant-fiber style escape burst when threat and descending drive peak together
-    if (s.loomL + s.loomR > 1.4 && this.network.a[C.DN] > 0.75 && fly.escapeCooldown === 0) {
-      fly.escapeCooldown = 1.2;
-      this.network.kick(C.T2, 0.8);
-      this.events.push({ type: 'escape', x: fly.x, y: fly.y });
-    }
 
     this.updateSugar(h);
     this.updatePredators(h);
+    this.updateEligibility(h);
 
     // metabolism: a baseline cost plus a speed^2 cost that scales with the drive gene
     const vn = fly.v / MAX_SPEED;
@@ -247,6 +343,69 @@ export class Game {
       this.trail.push({ x: fly.x, y: fly.y });
       if (this.trail.length > TRAIL_LENGTH) this.trail.shift();
     }
+  }
+
+  /**
+   * Start the giant-fiber escape: a fast burst turning away from the threat.
+   * @param {number} side  -1 threat on the left, +1 on the right
+   * @param {boolean} fromBrain  triggered by the real brain's DNp01 rather than the model
+   */
+  escape(side, fromBrain) {
+    const fly = this.fly;
+    fly.escapeCooldown = 1.2;
+    fly.escapeTimer = ESCAPE_TIME;
+    fly.escapeTurn = -side * 0.9; // positive turn = clockwise = to the fly's right
+    fly.feedTimer = 0;
+    fly.groomTimer = 0;
+    this.network.kick(C.DN, 0.8);
+    this.network.kick(C.T2, 0.8);
+    this.events.push({ type: 'escape', x: fly.x, y: fly.y, side, brain: fromBrain });
+  }
+
+  /** Survival instincts: timers for escape, feeding and grooming, and the behaviour label. */
+  instincts(h, bm, hunger) {
+    const fly = this.fly;
+    const s = this.sensors;
+    const threat = s.threatL + s.threatR;
+    fly.escapeTimer = Math.max(0, fly.escapeTimer - h);
+    fly.groomCooldown = Math.max(0, fly.groomCooldown - h);
+    // giant-fiber escape: the model's threat + descending drive peak, or the real brain's DNp01
+    if (fly.escapeCooldown === 0) {
+      if (threat > 1.0 && this.network.a[C.DN] > 0.75) this.escape(s.threatL > s.threatR ? -1 : 1, false);
+      else if (bm?.escape) this.escape(bm.escapeSide, true);
+    }
+    if (fly.feedTimer > 0) {
+      fly.feedTime += h;
+      // keep eating while the real brain's feeding motor neurons fire
+      const hold = bm?.feed && fly.feedTime < FEED_MAX;
+      fly.feedTimer = hold ? Math.max(fly.feedTimer, h) : Math.max(0, fly.feedTimer - h);
+      if (threat > 0.6) fly.feedTimer = 0;
+    }
+    if (fly.groomTimer > 0) {
+      fly.groomTimer = threat > 0.3 ? 0 : Math.max(0, fly.groomTimer - h);
+    } else if (fly.escapeTimer === 0 && fly.feedTimer === 0 && threat < 0.1 && fly.groomCooldown === 0) {
+      // a fed, safe fly grooms now and then; the real brain's grooming DNs can start it too
+      const idle = hunger < 0.3 && this.rng() < h / 9;
+      if (idle || bm?.groom) this.groom();
+    }
+    const odour = s.odorL + s.odorR;
+    this.behaviour =
+      fly.escapeTimer > 0
+        ? 'flee'
+        : fly.feedTimer > 0
+          ? 'feed'
+          : fly.groomTimer > 0
+            ? 'groom'
+            : hunger > 0.45 || odour > 0.55
+              ? 'forage'
+              : 'explore';
+  }
+
+  groom() {
+    this.fly.groomTimer = GROOM_TIME;
+    this.fly.groomCooldown = GROOM_TIME + 5;
+    this.network.kick(C.T1, 0.6); // front legs
+    this.events.push({ type: 'groom', x: this.fly.x, y: this.fly.y });
   }
 
   /** Fill this.sensors: directional odour at each antenna, looming at each eye. */
@@ -288,6 +447,9 @@ export class Game {
       const dy = p.y - fly.y;
       if (dx * dx + dy * dy < PREDATOR_SIGHT * PREDATOR_SIGHT * 1.6) addThreat(dx, dy, 70, 1.4);
     }
+    // looming from animals only (walls don't trigger escapes)
+    this.sensors.threatL = Math.min(3, loomL);
+    this.sensors.threatR = Math.min(3, loomR);
     // walls read as looming surfaces to the eyes
     const wallProbe = 90;
     if (fly.x < wallProbe) addThreat(-fly.x, 0, 22, 1);
@@ -323,6 +485,12 @@ export class Game {
       // antennal mechanosensation on contact
       this.network.kick(C.AL_L, 0.25);
       this.network.kick(C.AL_R, 0.25);
+      if (this.time > fly.wallCooldown) {
+        fly.wallCooldown = this.time + 0.5;
+        this.events.push({ type: 'bump', x: fly.x, y: fly.y });
+        // dust on the antennae: sometimes the fly stops to clean them
+        if (fly.groomTimer === 0 && fly.escapeTimer === 0 && fly.groomCooldown === 0 && this.rng() < 0.3) this.groom();
+      }
     }
   }
 
@@ -338,18 +506,30 @@ export class Game {
         this.eat(s);
       }
     }
-    while (this.sugars.length < SUGAR_TARGET) this.spawnSugar();
+    const target = this.foodTarget();
+    if (MISSIONS[this.mission]?.search) {
+      // keep one [Search] button on the map; results only come from searches
+      if (!this.sugars.some((s) => s.kind === SEARCH_TOKEN)) this.spawnSugar();
+    } else {
+      while (this.sugars.length < target) this.spawnSugar();
+    }
   }
 
   eat(sugar) {
     const reward = norm(this.weights[G.reward]);
     const gain = 10 * (0.5 + reward);
+    // proboscis extension: the fly stops to feed
+    this.fly.feedTimer = FEED_TIME;
+    this.fly.feedTime = 0;
+    this.fly.groomTimer = 0;
     this.energy = Math.min(MAX_ENERGY, this.energy + gain);
     this.score = Math.min(MAX_SCORE, this.score + 1);
     // gustatory input to the SEZ, dopamine burst in PAM
     this.network.kick(C.SEZ, 1.0);
     this.network.kick(C.PAM, 0.5 + reward);
     this.events.push({ type: 'eat', x: sugar.x, y: sugar.y, energy: gain, reward, score: this.score, kind: sugar.kind });
+    if (sugar.result) this.events.push({ type: 'read', result: sugar.result });
+    else if (sugar.kind === SEARCH_TOKEN) this.events.push({ type: 'needSearch' });
     this.advancePipeline(sugar);
     const gen = generationOf(this.score);
     if (gen > this.generation) {
@@ -358,19 +538,72 @@ export class Game {
     }
   }
 
-  /** Vibecode pipeline: the right token advances it, a full pass is a "deployment". */
+  /** Ordered missions: the right token advances the pipeline, a full pass completes it. */
   advancePipeline(sugar) {
-    if (sugar.kind === PIPELINE[this.pipeline]) {
+    const { stages, doneEvent } = MISSIONS[this.mission] ?? {};
+    if (!stages) return;
+    if (sugar.kind === stages[this.pipeline]) {
       this.pipeline++;
-      this.events.push({ type: 'stage', stage: sugar.kind, progress: this.pipeline / PIPELINE.length });
-      if (this.pipeline === PIPELINE.length) {
+      this.events.push({ type: 'stage', stage: sugar.kind, progress: this.pipeline / stages.length, mission: this.mission });
+      if (this.pipeline === stages.length) {
         this.pipeline = 0;
         this.deployments++;
         this.network.kick(C.PAM, 1.0);
-        this.events.push({ type: 'deployed', deployments: this.deployments });
+        this.events.push({ type: doneEvent, deployments: this.deployments, mission: this.mission });
+        this.train(0.35); // learning from success: a small dopamine reward
       }
     } else if (sugar.kind) {
-      this.events.push({ type: 'wrongStage', got: sugar.kind, need: PIPELINE[this.pipeline] });
+      this.events.push({ type: 'wrongStage', got: sugar.kind, need: stages[this.pipeline], mission: this.mission });
+    }
+  }
+
+  /**
+   * Dopamine-gated training (mushroom-body style reward learning): each gene
+   * keeps an eligibility trace of how active its pathway was over the last
+   * couple of seconds. A reward (+) strengthens pathways that were more active
+   * than average, a punishment (-) weakens them. Fractional changes accumulate
+   * until a gene moves a whole level, so the DNA changes only on real learning.
+   * @param {number} reward  +1 good fly, -1 bad fly (any magnitude)
+   * @returns {{gene:number, delta:number}[]} genes that changed
+   */
+  train(reward) {
+    const e = this.eligibility;
+    const mean = (e[0] + e[1] + e[2] + e[3] + e[4] + e[5]) / 6;
+    const changes = [];
+    for (let i = 0; i < 6; i++) {
+      this.plasticity[i] += TRAINING_RATE * reward * (e[i] - mean);
+      while (Math.abs(this.plasticity[i]) >= 1) {
+        const step = Math.sign(this.plasticity[i]);
+        this.plasticity[i] -= step;
+        const next = Math.max(0, Math.min(15, this.weights[i] + step));
+        if (next !== this.weights[i]) {
+          this.weights[i] = next;
+          changes.push({ gene: i, delta: step });
+        } else {
+          this.plasticity[i] = 0; // saturated
+          break;
+        }
+      }
+    }
+    if (changes.length) this.network.setWeights(this.weights);
+    this.network.kick(reward > 0 ? C.PAM : C.LH_L, Math.min(1, Math.abs(reward)));
+    this.events.push({ type: 'trained', reward, changes });
+    return changes;
+  }
+
+  updateEligibility(h) {
+    const a = this.network.a;
+    const k = h / ELIGIBILITY_TAU;
+    for (let i = 0; i < 6; i++) {
+      const src = GENE_SOURCES[i];
+      let v = 0;
+      if (src) {
+        for (const c of src) v += Math.min(1, a[c]);
+        v /= src.length;
+      } else {
+        v = Math.min(1, Math.abs(this.noise) / 2);
+      }
+      this.eligibility[i] += k * (v - this.eligibility[i]);
     }
   }
 

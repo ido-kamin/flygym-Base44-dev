@@ -91,6 +91,53 @@ describe('game', () => {
     expect(g.energy).toBeLessThan(e0 - 10);
   });
 
+  it('stops to feed on sugar, then walks on', () => {
+    const g = new Game({ seed: 5 });
+    g.sugars = [{ x: g.fly.x + Math.cos(g.fly.theta) * 14, y: g.fly.y + Math.sin(g.fly.theta) * 14, phase: 0, age: 0 }];
+    g.step(STEP);
+    run(g, 0.3);
+    expect(g.behaviour).toBe('feed');
+    expect(g.fly.v).toBeLessThan(40);
+    run(g, 0.6);
+    expect(g.behaviour).not.toBe('feed');
+  });
+
+  it('a spider looming close triggers a giant-fiber escape away from it', () => {
+    const g = new Game({ seed: 3 });
+    g.fly.theta = 0;
+    // spider ahead and to the fly's right (+y is the fly's right when heading +x)
+    g.addPredator(g.fly.x + 60, g.fly.y + 45);
+    let escape = null;
+    for (let i = 0; i < 120 && !escape; i++) {
+      g.step(STEP);
+      escape = g.drainEvents().find((e) => e.type === 'escape');
+    }
+    expect(escape).toBeTruthy();
+    expect(escape.side).toBe(1);
+    expect(g.behaviour).toBe('flee');
+    expect(g.fly.escapeTurn).toBeLessThan(0); // turns left, away
+  });
+
+  it('the real brain can steer and trigger escapes through brainMotor', () => {
+    const g = new Game({ seed: 4 });
+    g.brainMotor = { turn: 0, escape: true, escapeSide: -1, feed: false, groom: false };
+    g.step(STEP);
+    const ev = g.drainEvents().find((e) => e.type === 'escape');
+    expect(ev).toMatchObject({ side: -1, brain: true });
+    expect(g.fly.escapeTurn).toBeGreaterThan(0);
+  });
+
+  it('a fed, safe fly grooms now and then', () => {
+    const g = new Game({ seed: 8 });
+    let groomed = false;
+    for (let i = 0; i < 40 * 120 && !groomed; i++) {
+      g.energy = 100;
+      g.step(STEP);
+      groomed = g.drainEvents().some((e) => e.type === 'groom');
+    }
+    expect(groomed).toBe(true);
+  });
+
   it(`caps predators at ${PREDATOR_MAX}`, () => {
     const g = new Game({ seed: 1 });
     for (let i = 0; i < PREDATOR_MAX; i++) expect(g.addPredator(50 + i * 40, 50)).toBe(true);

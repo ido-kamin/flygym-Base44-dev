@@ -1,9 +1,8 @@
-# Base44 development notes
+# Base44 development environment
 
-- The preview serves the ProperDocs documentation, including `/api_reference/flygym/anatomy/`, rather than the separate React game under `web/fly-neural-sandbox`.
-- Start with `docker compose -f docker-compose.base44.yml up -d --build`. Source is bind-mounted; startup synchronizes `uv.lock` with the `dev` extra into a named virtualenv volume. No credentials or database are required for the docs.
-- MuJoCo's model asset generation needs the EGL/GL system libraries even for a documentation preview. The Base44 runtime Dockerfile installs them without baking in app source.
-- The existing ProperDocs startup hook downloads pinned MuJoCo/Three.js browser libraries and generates viewer/game assets when missing. First boot requires network access and can take longer than subsequent boots.
-- ProperDocs watches docs/config/wasm plus the source and documentation scripts. It rebuilds and reloads automatically; do not replace it with a static production server.
-- Verify with `docker compose -f docker-compose.base44.yml ps`, GET `/`, and GET `/api_reference/flygym/anatomy/` on port 3000. Logs should show watched paths and the live server on `0.0.0.0:3000`.
-- The independent React game has its own README, package manifest, and tests; it is not required to serve the documentation.
+- The home page (`/`) is the **Fly Neural Sandbox** game in `web/fly-neural-sandbox/` (Vite + React 19 + Tailwind v4 + three.js). The rest of the repository is the FlyGym Python library (NeuroMechFly); do not change `src/flygym`, `src/flygym_demo`, `docs/` or `wasm/` for game work.
+- Run `docker compose -f docker-compose.base44.yml up -d --build`. The `web` service runs `npm ci`, builds the game once, keeps `vite build --watch` running so edits rebuild `dist/`, and serves `dist/` plus the APIs with `node server/index.mjs` on port 3000.
+- APIs (`web/fly-neural-sandbox/server/app.mjs`): `GET /api/health`, `GET /api/search?q=` (Wikipedia proxy for the fly's web search), `POST /api/fly-apps` and `GET /api/fly-apps/:id` (real Base44 app creation from a fly's DNA through the Platform API).
+- Secrets: `BASE44_API_TOKEN` (Base44 access token) enables real app creation. Without it the game still works and hands the prompt to the Base44 builder instead. Optional env: `BASE44_ORGANIZATION_ID`, `FLY_APPS_DAILY_CAP` (default 25), `PUBLIC_URL`.
+- Checks: `cd web/fly-neural-sandbox && npm test` (vitest) and `npm run build`. Verify `curl /api/health` and `/` return 200; WebGL rendering needs an open preview tab.
+- Baked assets: `public/neuromechfly/` comes from `scripts/bake_neuromechfly.py` (needs the Python env: `uv run python web/fly-neural-sandbox/scripts/bake_neuromechfly.py`); `src/lib/flycoin.artifact.json` from `npm run compile:contract`. Both are committed; regenerate only when the model or contract changes.

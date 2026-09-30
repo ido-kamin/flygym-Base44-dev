@@ -1,0 +1,274 @@
+// Fly Neural Sandbox server: serves the built game (dist/) and three small APIs.
+//
+//   GET  /api/health          liveness + which features are configured
+//   GET  /api/search?q=...     the fly's web search (Wikipedia, proxied + cached)
+//   POST /api/fly-apps         the fly ships a REAL Base44 app from its DNA
+//   GET  /api/fly-apps/:id     build status -> deploy -> live URL
+//
+// Real app creation calls the Base44 Platform API (POST /api/apps) with the
+// server's own access token (BASE44_API_TOKEN), so it spends that workspace's
+// credits. To keep that safe the prompt is never taken from the client: the
+// server decodes the Base44 DNA and derives the prompt itself; requests are
+// rate-limited per visitor and globally (the Platform API allows 5/min), and a
+// daily cap bounds spend. Without a token the endpoint reports
+// `not_configured` and the game falls back to the builder hand-off link.
+
+import { createReadStream } from 'node:fs';
+import { stat } from 'node:fs/promises';
+import { createServer } from 'node:http';
+import { extname, join, normalize, resolve } from 'node:path';
+
+import { decodeFlyFromBase44, DNAError } from '../src/lib/base44.js';
+import { flyAppPrompt } from '../src/lib/base44App.js';
+
+const MIME = {
+  '.html': 'text/html; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.json': 'application/json; charset=utf-8',
+  '.bin': 'application/octet-stream',
+  '.gz': 'application/gzip', // served as-is; the client inflates it (no Content-Encoding)
+  '.svg': 'image/svg+xml',
+  '.png': 'image/png',
+  '.ico': 'image/x-icon',
+  '.wasm': 'application/wasm',
+};
+
+const json = (res, status, body) => {
+  res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
+  res.end(JSON.stringify(body));
+};
+
+async function readJson(req, limit = 2048) {
+  let size = 0;
+  const chunks = [];
+  for await (const c of req) {
+    size += c.length;
+    if (size > limit) throw Object.assign(new Error('body too large'), { status: 413 });
+    chunks.push(c);
+  }
+  try {
+    return JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}');
+  } catch {
+    throw Object.assign(new Error('invalid JSON'), { status: 400 });
+  }
+}
+
+/** Sliding-window limiter: at most `max` hits per `windowMs` per key. */
+export function rateLimiter(max, windowMs, now = () => Date.now()) {
+  const hits = new Map();
+  return (key) => {
+    const t = now();
+    const list = (hits.get(key) ?? []).filter((x) => t - x < windowMs);
+    if (list.length >= max) {
+      hits.set(key, list);
+      return false;
+    }
+    list.push(t);
+    hits.set(key, list);
+    return true;
+  };
+}
+
+const stripHtml = (s) =>
+  s
+    .replace(/<[^>]+>/g, '')
+    .replace(/&quot;/g, '"')
+    .replace(/&amp;/g, '&')
+    .replace(/&#0?39;/g, "'")
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>');
+
+/**
+ * @param {object} opts
+ * @param {string} opts.distDir     built game to serve
+ * @param {object} [opts.env]       process.env-like config
+ * @param {typeof fetch} [opts.fetchImpl]
+ * @param {() => number} [opts.now]
+ */
+export function createFlyServer({ distDir, env = process.env, fetchImpl = fetch, now = () => Date.now() } = {}) {
+  const token = env.BASE44_API_TOKEN || '';
+  const apiBase = (env.BASE44_API_URL || 'https://app.base44.com').replace(/\/$/, '');
+  const dailyCap = Number(env.FLY_APPS_DAILY_CAP || 25);
+  const orgId = env.BASE44_ORGANIZATION_ID || undefined;
+  const publicUrl = env.PUBLIC_URL || '';
+
+  const perVisitor = rateLimiter(1, 120_000, now); // 1 real build / 2 min / visitor
+  const global = rateLimiter(4, 60_000, now); // stay under the Platform API's 5/min
+  const searchLimit = rateLimiter(30, 60_000, now);
+  let day = new Date(now()).toISOString().slice(0, 10);
+  let builtToday = 0;
+  /** apps this server created: id -> {dna, name, createdAt, url?} (never proxy other ids) */
+  const jobs = new Map();
+  const searchCache = new Map();
+
+  const base44 = async (method, path, body) => {
+    const r = await fetchImpl(`${apiBase}${path}`, {
+      method,
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json', accept: 'application/json' },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+    const text = await r.text();
+    let data = null;
+    try {
+      data = text ? JSON.parse(text) : null;
+    } catch {
+      data = { raw: text.slice(0, 200) };
+    }
+    if (!r.ok) throw Object.assign(new Error(`Base44 API ${method} ${path} -> ${r.status}`), { status: r.status, data });
+    return data;
+  };
+
+  async function search(req, res, url) {
+    const q = (url.searchParams.get('q') || '').trim().slice(0, 80);
+    if (!q) return json(res, 400, { error: 'missing_query' });
+    if (!searchLimit(clientKey(req))) return json(res, 429, { error: 'rate_limited' });
+    const hit = searchCache.get(q.toLowerCase());
+    if (hit && now() - hit.at < 600_000) return json(res, 200, { query: q, results: hit.results, cached: true });
+    const wiki = new URL('https://en.wikipedia.org/w/api.php');
+    wiki.search = new URLSearchParams({
+      action: 'query',
+      list: 'search',
+      srsearch: q,
+      srlimit: '6',
+      srprop: 'snippet',
+      format: 'json',
+      utf8: '1',
+    });
+    try {
+      const r = await fetchImpl(wiki, { headers: { 'user-agent': 'FlyNeuralSandbox/0.2 (Base44 demo)' } });
+      if (!r.ok) throw new Error(`wikipedia ${r.status}`);
+      const data = await r.json();
+      const results = (data?.query?.search ?? []).map((s) => ({
+        title: s.title,
+        snippet: stripHtml(s.snippet ?? '').slice(0, 220),
+        url: `https://en.wikipedia.org/wiki/${encodeURIComponent(s.title.replace(/ /g, '_'))}`,
+      }));
+      searchCache.set(q.toLowerCase(), { at: now(), results });
+      return json(res, 200, { query: q, results });
+    } catch (err) {
+      return json(res, 502, { error: 'search_unavailable', detail: String(err.message ?? err) });
+    }
+  }
+
+  async function createApp(req, res) {
+    if (!token) return json(res, 503, { error: 'not_configured' });
+    const body = await readJson(req);
+    let fly;
+    try {
+      fly = decodeFlyFromBase44(String(body.dna ?? ''));
+    } catch (err) {
+      if (err instanceof DNAError) return json(res, 400, { error: 'invalid_dna' });
+      throw err;
+    }
+    const today = new Date(now()).toISOString().slice(0, 10);
+    if (today !== day) {
+      day = today;
+      builtToday = 0;
+    }
+    if (builtToday >= dailyCap) return json(res, 429, { error: 'daily_cap' });
+    if (!perVisitor(clientKey(req))) return json(res, 429, { error: 'rate_limited' });
+    if (!global('all')) return json(res, 429, { error: 'busy' });
+
+    const link = publicUrl ? `${publicUrl.replace(/\/$/, '')}/#dna=${fly.dna}` : '';
+    const { title, prompt } = flyAppPrompt(fly.dna, fly.weights, { score: fly.score, url: link });
+    builtToday++;
+    try {
+      const app = await base44('POST', '/api/apps', {
+        initial_message: { content: prompt },
+        name: `Fly ${fly.dna} · ${title}`.slice(0, 80),
+        user_description: `Designed by fruit fly ${fly.dna} in the Fly Neural Sandbox.`,
+        public_settings: 'public_without_login',
+        ...(orgId ? { organization_id: orgId } : {}),
+      });
+      jobs.set(app.id, { dna: fly.dna, name: app.name, createdAt: now(), url: null, deploying: false });
+      return json(res, 201, { id: app.id, name: app.name, title, state: app.status?.state ?? 'processing' });
+    } catch (err) {
+      builtToday--;
+      const paywall = err.data?.status?.error_source === 'paywall';
+      return json(res, 502, { error: paywall ? 'no_credits' : 'create_failed', status: err.status ?? null });
+    }
+  }
+
+  async function appStatus(res, id) {
+    const job = jobs.get(id);
+    if (!job) return json(res, 404, { error: 'unknown_app' });
+    if (job.url) return json(res, 200, { id, state: 'live', url: job.url, name: job.name });
+    try {
+      const app = await base44('GET', `/api/apps/${id}`);
+      const state = app?.status?.state ?? 'processing';
+      if (state === 'error') {
+        return json(res, 200, { id, state: 'error', reason: app.status?.error_source ?? 'build' });
+      }
+      if (state !== 'ready') return json(res, 200, { id, state: 'building', name: job.name });
+      if (!job.deploying) {
+        job.deploying = true;
+        await base44('POST', `/api/apps/${id}/deploy`, {});
+      }
+      const pub = await base44('GET', `/api/apps/platform/${id}/published-url`);
+      if (pub?.url) job.url = pub.url;
+      return json(res, 200, { id, state: job.url ? 'live' : 'deploying', url: job.url, name: job.name });
+    } catch (err) {
+      return json(res, 200, { id, state: 'deploying', note: `retrying (${err.status ?? 'network'})` });
+    }
+  }
+
+  async function serveStatic(req, res, url) {
+    const root = resolve(distDir);
+    let path = normalize(decodeURIComponent(url.pathname)).replace(/^(\.\.[/\\])+/, '');
+    let file = join(root, path);
+    if (!file.startsWith(root)) return json(res, 403, { error: 'forbidden' });
+    let info = await stat(file).catch(() => null);
+    if (!info || info.isDirectory()) {
+      // SPA: unknown paths (and "/") get the game
+      file = join(root, 'index.html');
+      path = '/index.html';
+      info = await stat(file).catch(() => null);
+    }
+    if (!info) {
+      res.writeHead(503, { 'content-type': 'text/plain; charset=utf-8', 'retry-after': '5' });
+      return res.end('The fly is still hatching (building the game)… refresh in a few seconds.');
+    }
+    const immutable = path.startsWith('/assets/');
+    // revalidated files (index.html, the 7.7 MB connectome, meshes) get an ETag so repeat visits are a 304
+    const etag = `"${info.size.toString(36)}-${Math.floor(info.mtimeMs).toString(36)}"`;
+    if (!immutable && req.headers['if-none-match'] === etag) {
+      res.writeHead(304, { etag, 'cache-control': 'no-cache' });
+      return res.end();
+    }
+    res.writeHead(200, {
+      'content-type': MIME[extname(file)] ?? 'application/octet-stream',
+      'content-length': info.size,
+      'cache-control': immutable ? 'public, max-age=31536000, immutable' : 'no-cache',
+      etag,
+      'x-content-type-options': 'nosniff',
+    });
+    if (req.method === 'HEAD') return res.end();
+    createReadStream(file).pipe(res);
+  }
+
+  function clientKey(req) {
+    const fwd = String(req.headers['x-forwarded-for'] ?? '').split(',')[0].trim();
+    return fwd || req.socket?.remoteAddress || 'unknown';
+  }
+
+  async function handle(req, res) {
+    const url = new URL(req.url, 'http://local');
+    try {
+      if (url.pathname === '/api/health') {
+        return json(res, 200, { ok: true, realApps: Boolean(token), dailyCap, builtToday });
+      }
+      if (url.pathname === '/api/search' && req.method === 'GET') return await search(req, res, url);
+      if (url.pathname === '/api/fly-apps' && req.method === 'POST') return await createApp(req, res);
+      const m = url.pathname.match(/^\/api\/fly-apps\/([a-f0-9]{24})$/);
+      if (m && req.method === 'GET') return await appStatus(res, m[1]);
+      if (url.pathname.startsWith('/api/')) return json(res, 404, { error: 'not_found' });
+      if (req.method !== 'GET' && req.method !== 'HEAD') return json(res, 405, { error: 'method_not_allowed' });
+      return await serveStatic(req, res, url);
+    } catch (err) {
+      return json(res, err.status ?? 500, { error: err.status ? err.message : 'server_error' });
+    }
+  }
+
+  return { handle, server: createServer(handle), jobs };
+}

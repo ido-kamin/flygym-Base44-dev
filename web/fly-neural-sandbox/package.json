@@ -9,7 +9,8 @@
     "build": "vite build",
     "preview": "vite preview",
     "test": "vitest run",
-    "compile:contract": "node scripts/compile_flycoin.mjs"
+    "compile:contract": "node scripts/compile_flycoin.mjs",
+    "start": "node server/index.mjs"
   },
   "dependencies": {
     "react": "^19.3.0",
