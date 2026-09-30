@@ -1,0 +1,27 @@
+services:
+  docs:
+    build:
+      context: .
+      dockerfile: .base44/Dockerfile
+    restart: on-failure
+    working_dir: /app
+    ports:
+      - "3000:3000"
+    volumes:
+      - .:/app
+      - python-env:/app/.venv
+      - uv-cache:/root/.cache/uv
+    environment:
+      MUJOCO_GL: egl
+      PYOPENGL_PLATFORM: egl
+      UV_LINK_MODE: copy
+    command: ["sh", "-ec", "uv sync --frozen --extra dev && exec uv run --no-sync properdocs serve --dev-addr 0.0.0.0:3000 --watch src --watch scripts/dev"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; r = urllib.request.urlopen('http://127.0.0.1:3000/', timeout=5); assert r.status == 200 and b'NeuroMechFly' in r.read()"]
+      interval: 30s
+      timeout: 10s
+      start_period: 180s
+      retries: 3
+volumes:
+  python-env:
+  uv-cache:
