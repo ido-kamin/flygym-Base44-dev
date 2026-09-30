@@ -18,6 +18,7 @@ import { gunzipSync } from 'node:zlib';
 import { WebSocketServer } from 'ws';
 
 import { parseConnectome } from '../src/lib/lifBrain.js';
+import { startSocketHeartbeat } from './socketHeartbeat.mjs';
 
 const IDLE_MS = 120_000; // a brain with no message from its page for this long is stopped
 const MAX_BUFFERED = 2_000_000; // skip activity frames for slow connections
@@ -227,6 +228,7 @@ export function createBrainHost({
     maxPayload: 8192,
     perMessageDeflate: { threshold: 2048, zlibDeflateOptions: { level: 1 }, serverNoContextTakeover: true, clientNoContextTakeover: true },
   });
+  const stopHeartbeat = startSocketHeartbeat(wss);
   wss.on('connection', connect);
   const idle = setInterval(() => {
     for (const s of sessions) if (now() - s.lastSeen > IDLE_MS) s.ws.close(1000, 'idle');
@@ -281,6 +283,7 @@ export function createBrainHost({
       }
     },
     close() {
+      stopHeartbeat();
       clearInterval(idle);
       for (const s of sessions) s.ws.close(1001, 'shutting down');
       wss.close();
